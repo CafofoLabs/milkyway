@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## Unreleased
+
+### Features
+- **proxmox:** collect installation facts over trusted SSH ([#6](https://github.com/CafofoLabs/milkyway/pull/6))
 ## v0.1.0
 
 ### Documentation
