@@ -216,7 +216,7 @@ def remote(action, node):
                     stdout=output,
                     stderr=subprocess.STDOUT,
                     env=env,
-                    timeout=3600,
+                    timeout=14400,
                 )
             # pveupgrade may return zero even when its underlying APT command fails.
             if (
@@ -271,7 +271,7 @@ def main():
                 check=True,
                 capture_output=True,
                 text=True,
-                timeout=3900,
+                timeout=14700,
             )
             print(result.stdout.strip())
     except (
