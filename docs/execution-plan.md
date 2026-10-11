@@ -1,6 +1,6 @@
 # First-stage execution plan
 
-Status: repository foundation implemented with Nebula v0.1.0. Repository checks and documentation builds are available; hosted Read the Docs publication awaits account linking. Mercury baseline and environment integration remain gated by the installation handoff. No services have been deployed.
+Status: repository foundation implemented with Nebula v0.1.0. Repository checks and documentation builds are available; hosted Read the Docs publication awaits account linking. Read-only installation preflight is implemented and tested offline. Mercury baseline and its operational validation remain gated by the installation handoff. No services have been deployed.
 
 ## Objective
 

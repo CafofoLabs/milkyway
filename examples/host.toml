@@ -1,0 +1,5 @@
+[host]
+address = "192.0.2.10"
+username = "root"
+ssh_port = 22
+expected_hostname = "node-a"
