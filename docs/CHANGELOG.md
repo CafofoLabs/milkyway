@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## Unreleased
+
+### Features
+- **proxmox:** manage repositories and bootstrap updates through native tools ([#12](https://github.com/CafofoLabs/milkyway/pull/12))
 ## v0.2.1
 
 ### Fixes
