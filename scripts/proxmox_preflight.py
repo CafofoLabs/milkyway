@@ -85,9 +85,16 @@ def host_config(path):
 
 
 def ssh_args(host):
+    identity = os.environ.get("MILKYWAY_SSH_IDENTITY_FILE")
+    options = []
+    if identity:
+        if not Path(identity).is_file():
+            raise ValueError("The selected SSH identity file does not exist")
+        options = ["-i", identity, "-o", "IdentitiesOnly=yes"]
     return [
         "ssh",
         "-T",
+        *options,
         "-o",
         "BatchMode=yes",
         "-o",

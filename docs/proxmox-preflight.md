@@ -35,3 +35,5 @@ Exit status 1 means a probe failed, identity/version differed, cluster membershi
 On connection failure, verify the management network, trusted host fingerprint, SSH key access, and root authorization. Do not disable host-key verification to make the check pass. A report failure requires no host rollback: nothing was changed remotely. Inspect the local report and establish the installation handoff before implementing or running baseline apply.
 
 [Proxmox pvesh documentation](https://pve.proxmox.com/pve-docs/pvesh.1.html) describes the local API interface and its root requirement.
+
+Set `MILKYWAY_SSH_IDENTITY_FILE` to an existing local key path to select that identity with `IdentitiesOnly=yes`. The framework never reads the key contents. Otherwise SSH uses its normal configuration and agent.
