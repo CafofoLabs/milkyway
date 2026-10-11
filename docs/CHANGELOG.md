@@ -4,8 +4,9 @@ Generated from merged PR titles preserved in squash commits.
 
 ## v0.1.0
 
-### Features
-- **foundation:** add updateable repository lifecycle ([#1](https://github.com/CafofoLabs/nebula/pull/1))
+### Documentation
+- **project:** adopt orbital identity and foundation plan
+- **plan:** sequence Nebula adoption and Mercury bootstrap ([#2](https://github.com/CafofoLabs/milkyway/pull/2))
 
-### Maintenance
-- **repository:** initialize Nebula
+### Features
+- **foundation:** adopt Nebula v0.1.0 repository lifecycle ([#3](https://github.com/CafofoLabs/milkyway/pull/3))
