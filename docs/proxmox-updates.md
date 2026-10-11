@@ -22,3 +22,5 @@ Package output stays in `/var/log/milkyway-updates.log` with mode 0600 on the ho
 Reboot is separate and never automatic. Check kernel changes as well as `reboot_required`, because the distribution marker alone may not cover every Proxmox kernel update. After an agreed reboot, verify SSH, Proxmox services, storage, and the read-only preflight. Rollback of installed packages is not automatic; use console recovery if package installation fails. This module is not a maintenance procedure for an active cluster.
 
 References: [Proxmox repositories](https://github.com/proxmox/pve-docs/blob/master/pve-package-repos.adoc), [official update procedure](https://github.com/proxmox/pve-docs/blob/master/system-software-updates.adoc), and [pveupgrade implementation](https://github.com/proxmox/pve-manager/blob/master/bin/pveupgrade).
+
+The native CLI streams task progress before its final JSON task identifier. The adapter consumes only that final identifier and verifies the native task status. It does not pass the CLI formatter’s `--quiet` option, which suppresses the identifier. Progress output is captured and never forwarded to the caller.
