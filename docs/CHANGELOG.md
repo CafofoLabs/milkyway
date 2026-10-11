@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## Unreleased
+
+### Fixes
+- **proxmox:** reconcile installer hostnames on empty standalone nodes ([#9](https://github.com/CafofoLabs/milkyway/pull/9))
 ## v0.2.0
 
 ### Features
