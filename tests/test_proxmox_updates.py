@@ -82,3 +82,32 @@ def test_failed_native_refresh_blocks_upgrade(monkeypatch):
     monkeypatch.setattr(updates, "api", lambda *a, **k: next(answers))
     with pytest.raises(ValueError, match="refresh failed"):
         updates.refresh("node-a", {})
+
+
+def test_native_refresh_progress_is_not_parsed_as_json(monkeypatch):
+    task = "UPID:node-a:00000001:00000002:00000003:aptupdate::root@pam:"
+    monkeypatch.setattr(
+        updates,
+        "run",
+        lambda *a, **k: (
+            "starting apt-get update\nReading package lists...\n"
+            + __import__("json").dumps(task)
+        ),
+    )
+    assert updates.api("node-a", "create", "apt/update") == task
+
+
+def test_refresh_does_not_hide_task_id_with_formatter_quiet(monkeypatch):
+    calls = []
+
+    def api(*args, **kwargs):
+        calls.append(args)
+        return (
+            "UPID:node-a:synthetic"
+            if args[1] == "create"
+            else {"status": "stopped", "exitstatus": "OK"}
+        )
+
+    monkeypatch.setattr(updates, "api", api)
+    updates.refresh("node-a", {})
+    assert "--quiet" not in calls[0]

@@ -31,6 +31,16 @@ def api(node, method, endpoint, *options, env=None):
         "json",
         env=env,
     )
+    if method == "create" and endpoint == "apt/update":
+        # Native CLI workers stream progress before their final JSON task ID.
+        task = json.loads(output.splitlines()[-1])
+        if (
+            not isinstance(task, str)
+            or not task.startswith(f"UPID:{node}:")
+            or not re.fullmatch(r"UPID:[A-Za-z0-9:@_.-]+", task)
+        ):
+            raise ValueError("Expected the native refresh task identifier")
+        return task
     return json.loads(output) if output else None
 
 
@@ -108,7 +118,7 @@ def simulation(text):
 
 
 def refresh(node, env):
-    task = api(node, "create", "apt/update", "--quiet", "1", env=env)
+    task = api(node, "create", "apt/update", env=env)
     for _ in range(150):
         state = api(node, "get", f"tasks/{task}/status")
         if state["status"] == "stopped":
