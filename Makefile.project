@@ -11,3 +11,13 @@ host-rename-plan: ## Preview renaming an empty standalone node (requires PREVIOU
 	$(RUN) python scripts/proxmox_hostname.py plan --inventory "$(INVENTORY)" --previous-hostname "$(PREVIOUS_HOSTNAME)"
 host-rename: ## Set persistent hostname; reboot separately, then repeat to archive the empty old node
 	$(RUN) python scripts/proxmox_hostname.py apply --inventory "$(INVENTORY)" --previous-hostname "$(PREVIOUS_HOSTNAME)"
+
+.PHONY: host-repositories-plan host-repositories host-updates-plan host-updates
+host-repositories-plan: ## Preview subscription-free Proxmox repositories
+	$(RUN) python scripts/proxmox_updates.py repositories-plan --inventory "$(INVENTORY)"
+host-repositories: ## Reconcile repositories through the Proxmox API
+	$(RUN) python scripts/proxmox_updates.py repositories-apply --inventory "$(INVENTORY)"
+host-updates-plan: ## Refresh through Proxmox and simulate the full upgrade
+	$(RUN) python scripts/proxmox_updates.py updates-plan --inventory "$(INVENTORY)"
+host-updates: ## Apply bootstrap updates using Proxmox pveupgrade and verify completion
+	$(RUN) python scripts/proxmox_updates.py updates-apply --inventory "$(INVENTORY)"
