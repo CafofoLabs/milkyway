@@ -143,8 +143,8 @@ def test_existing_tag_cannot_be_moved(tmp_path, monkeypatch):
         cli.publish()
 
 
-def test_template_copy_and_update_preserve_customizations(tmp_path):
-    from copier import run_copy, run_update
+def test_template_copy_and_update_preserve_customizations(tmp_path, monkeypatch):
+    from copier import run_copy
 
     root = Path.cwd()
     if not (root / "copier.yml").exists():
@@ -178,6 +178,7 @@ def test_template_copy_and_update_preserve_customizations(tmp_path):
         "author_email": "fixture@example.invalid",
     }
     run_copy(str(source), target, data=answers, defaults=True, vcs_ref="v0.1.0")
+    assert (target / "VERSION").read_text() == "0.0.0\n"
     assert not (target / ".nebula").is_symlink()
     assert (target / ".nebula/nebula/cli.py").exists()
     assert not (target / ".readthedocs.yaml").exists()
@@ -200,7 +201,8 @@ def test_template_copy_and_update_preserve_customizations(tmp_path):
     guide.write_text(guide.read_text() + "\nNew template behavior.\n")
     commit(source, "docs(template): add upgrade guidance")
     subprocess.run(["git", "-C", str(source), "tag", "v0.1.1"], check=True)
-    run_update(target, defaults=True, overwrite=True, vcs_ref="v0.1.1")
+    monkeypatch.chdir(target)
+    cli.template_update("v0.1.1")
     assert (target / "README.md").read_text() == "# Custom consumer\n"
     assert (target / "Makefile.project").exists()
     assert 'commands = [["true"]]' in config.read_text()
@@ -266,3 +268,47 @@ def test_invalid_notes_do_not_create_a_tag(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="Changelog"):
         cli.publish()
     assert not cli.git("tag", "--list", "v0.1.0")
+
+
+def test_changelog_refresh_after_release_preserves_main_and_retries(tmp_path, monkeypatch):
+    repo = repository(tmp_path / "refresh")
+    remote = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", str(remote)], check=True)
+    (repo / "nebula.toml").write_text(
+        '[project]\nrepository="Example/project"\n[git]\nauthor_name="Fixture"\nauthor_email="fixture@example.invalid"\n'
+    )
+    (repo / "docs").mkdir()
+    target = repo / "docs/CHANGELOG.md"
+    target.write_text("Original generated history\n")
+    commit(repo, "feat(repository): initialize")
+    subprocess.run(
+        ["git", "-C", str(repo), "push", "-u", "origin", "main"], check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "switch", "-c", "chore/changelog"], check=True, capture_output=True
+    )
+    target.write_text("Unreleased generated history\n")
+    commit(repo, "chore(changelog): refresh accepted history")
+    subprocess.run(
+        ["git", "-C", str(repo), "push", "-u", "origin", "chore/changelog"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(["git", "-C", str(repo), "switch", "main"], check=True, capture_output=True)
+    target.write_text("Released generated history\n")
+    (repo / "application.txt").write_text("Accepted main change\n")
+    commit(repo, "chore(release): v0.1.0")
+    subprocess.run(["git", "-C", str(repo), "push"], check=True, capture_output=True)
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(cli, "cliff", lambda *args: "Complete generated history")
+    monkeypatch.setattr(
+        cli, "api", lambda path, *args: [{"number": 1, "html_url": "https://example.invalid/pr"}]
+    )
+    assert cli.prepare_pr("changelog") == 1
+    assert target.read_text() == "Complete generated history\n"
+    assert (repo / "application.txt").read_text() == "Accepted main change\n"
+    first = cli.git("rev-parse", "HEAD")
+    subprocess.run(["git", "switch", "main"], check=True, capture_output=True)
+    assert cli.prepare_pr("changelog") == 1
+    assert cli.git("rev-parse", "HEAD") == first

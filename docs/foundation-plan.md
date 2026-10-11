@@ -1,6 +1,6 @@
 # Foundation plan
 
-Status: repository automation implemented through Nebula v0.1.0. This document retains the design requirements; host automation and hosted documentation publication are not yet complete.
+Status: repository automation implemented through Nebula v0.1.3. This document retains the design requirements; host automation and hosted documentation publication are not yet complete.
 
 ## Ownership
 
