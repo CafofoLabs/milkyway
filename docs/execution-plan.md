@@ -1,6 +1,6 @@
 # First-stage execution plan
 
-Status: planning. This change creates documentation and the Nimbus repository; it does not install tooling, deploy services, or modify Mercury.
+Status: repository foundation implemented with Nebula v0.1.0. Repository checks and documentation builds are available; hosted Read the Docs publication awaits account linking. Mercury baseline and environment integration remain gated by the installation handoff. No services have been deployed.
 
 ## Objective
 

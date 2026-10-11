@@ -1,6 +1,6 @@
 # Foundation plan
 
-Status: proposed; repository automation and infrastructure changes are not implemented by this document.
+Status: repository automation implemented through Nebula v0.1.0. This document retains the design requirements; host automation and hosted documentation publication are not yet complete.
 
 ## Ownership
 
@@ -57,7 +57,7 @@ Proposed Makefile interface:
 | `make release` | Request the protected release workflow. |
 | `make template-update` | Prepare an update from a selected template release. |
 
-These are proposed interfaces, not commands available in this repository today.
+These commands are now provided by the accepted Nebula template.
 
 ## 4. Maintain changelog and publish optional releases
 
@@ -111,8 +111,8 @@ Then adopt the first tagged template release in MilkyWay. Implement the first in
 - Nebula is the public, language-independent project template under CafofoLabs.
 - MilkyWay and its documentation are public. Use Read the Docs Community; its account/repository integration still needs to be established.
 - Nimbus is the homelab consumer under TheAldersonProject. It starts private; do not publish its inventory or documentation through the public framework documentation.
-- MilkyWay main protection is configured: PR required, administrator enforcement, no force pushes or deletion, linear history, resolved conversations, and squash-only merging. Required CI checks are pending implementation.
-- Nimbus private-repository protection must be verified independently against the personal account's capabilities. Never change visibility or purchase a plan implicitly.
+- MilkyWay main protection is configured: PR required, administrator enforcement, no force pushes or deletion, linear history, resolved conversations, and squash-only merging. The Nebula CI job is implemented and becomes required after a successful remote run.
+- Nimbus private-repository protection is verified independently against the personal account's capabilities. Never change visibility or purchase a plan implicitly.
 - See the [first-stage execution plan](execution-plan.md) for sequencing and acceptance gates.
 
 ## Sources

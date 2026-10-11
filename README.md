@@ -7,7 +7,9 @@
 
 A framework for provisioning and configuring a professional self-hosted homelab, built around Proxmox, Tailscale, Authentik, OpenBao, Komodo, and observability.
 
-**Status:** planning. Infrastructure automation is not implemented yet.
+**Status:** repository foundation is available. Host automation and service deployment follow after the installation handoff.
+
+Run `make setup` to install development tools and hooks, then `make check`. See [development](docs/development.md) and [releases](docs/releases.md).
 
 - [Foundation plan](docs/foundation-plan.md)
 - [Brand assets](docs/branding.md)
