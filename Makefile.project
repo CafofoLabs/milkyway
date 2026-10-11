@@ -4,3 +4,10 @@ REPORT ?= .milkyway/preflight.json
 .PHONY: host-preflight
 host-preflight: ## Collect a read-only Proxmox installation report from the selected inventory
 	$(RUN) python scripts/proxmox_preflight.py --inventory "$(INVENTORY)" --report "$(REPORT)"
+
+PREVIOUS_HOSTNAME ?=
+.PHONY: host-rename-plan host-rename
+host-rename-plan: ## Preview renaming an empty standalone node (requires PREVIOUS_HOSTNAME)
+	$(RUN) python scripts/proxmox_hostname.py plan --inventory "$(INVENTORY)" --previous-hostname "$(PREVIOUS_HOSTNAME)"
+host-rename: ## Set persistent hostname; reboot separately, then repeat to archive the empty old node
+	$(RUN) python scripts/proxmox_hostname.py apply --inventory "$(INVENTORY)" --previous-hostname "$(PREVIOUS_HOSTNAME)"

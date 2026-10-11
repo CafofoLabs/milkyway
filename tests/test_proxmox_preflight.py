@@ -105,3 +105,17 @@ def test_report_is_private_repeatable_and_does_not_follow_symlinks(tmp_path):
     with pytest.raises(OSError):
         preflight.save_report(link, {})
     assert path.read_bytes() == first
+
+
+def test_explicit_identity_is_used_without_reading_it(tmp_path, monkeypatch):
+    identity = tmp_path / "identity"
+    identity.touch()
+    monkeypatch.setenv("MILKYWAY_SSH_IDENTITY_FILE", str(identity))
+    monkeypatch.setattr(
+        preflight.Path,
+        "read_text",
+        lambda self: pytest.fail("Identity contents must not be read"),
+    )
+    args = preflight.ssh_args(host())
+    assert args[args.index("-i") + 1] == str(identity)
+    assert "IdentitiesOnly=yes" in args
