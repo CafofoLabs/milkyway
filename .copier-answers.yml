@@ -1,0 +1,8 @@
+# Non-secret template answers. Do not add credentials.
+_commit: v0.1.0
+_src_path: gh:CafofoLabs/nebula
+author_email: thiago@thir.info
+author_name: Thiago Dias
+documentation: public
+project_name: MilkyWay
+repository: CafofoLabs/milkyway

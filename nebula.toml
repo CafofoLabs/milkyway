@@ -1,0 +1,11 @@
+[project]
+name = "MilkyWay"
+repository = "CafofoLabs/milkyway"
+documentation = "public"
+
+[git]
+author_name = "Thiago Dias"
+author_email = "thiago@thir.info"
+
+[checks]
+commands = []
