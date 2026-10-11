@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## Unreleased
+
+### Fixes
+- **proxmox:** allow slow updates to finish within a safe window ([#18](https://github.com/CafofoLabs/milkyway/pull/18))
 ## v0.3.1
 
 ### Fixes
