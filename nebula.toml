@@ -8,4 +8,37 @@ author_name = "Thiago Dias"
 author_email = "thiago@thir.info"
 
 [checks]
-commands = [["uv", "run", "--frozen", "--project", ".nebula", "ruff", "check", "scripts", "tests"], ["uv", "run", "--frozen", "--project", ".nebula", "ruff", "format", "--check", "scripts", "tests"], ["uv", "run", "--frozen", "--project", ".nebula", "pytest", "tests"]
+commands = [
+  [
+    "uv",
+    "run",
+    "--frozen",
+    "--project",
+    ".nebula",
+    "ruff",
+    "check",
+    "scripts",
+    "tests"
+  ],
+  [
+    "uv",
+    "run",
+    "--frozen",
+    "--project",
+    ".nebula",
+    "ruff",
+    "format",
+    "--check",
+    "scripts",
+    "tests"
+  ],
+  [
+    "uv",
+    "run",
+    "--frozen",
+    "--project",
+    ".nebula",
+    "pytest",
+    "tests"
+  ]
+]

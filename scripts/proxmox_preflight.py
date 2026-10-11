@@ -11,7 +11,6 @@ import sys
 import tomllib
 from pathlib import Path
 
-
 COMMANDS = {
     "version": ["pveversion"],
     "kernel": ["uname", "-r"],
