@@ -6,9 +6,9 @@ Status: proposed; repository automation and infrastructure changes are not imple
 
 | Project | Responsibility |
 | --- | --- |
-| CafofoLabs project template, name pending | Language-independent repository safeguards, tooling, documentation, releases, and template upgrades. |
+| CafofoLabs/Nebula | Language-independent repository safeguards, tooling, documentation, releases, and template upgrades. |
 | CafofoLabs/MilkyWay | Versioned infrastructure modules and interfaces for provisioning and configuring shared services. |
-| TheAldersonProject homelab, name pending | Inventory, host names, networks, domains, placement, and environment-specific configuration. |
+| TheAldersonProject/Nimbus | Inventory, host names, networks, domains, placement, and environment-specific configuration. |
 
 The template must work without MilkyWay. MilkyWay must work without this particular homelab. Mercury is the first homelab Proxmox host, not a framework default. Application projects own their deployments and consume infrastructure through explicit interfaces.
 
@@ -106,11 +106,14 @@ Use synthetic secret fixtures outside real project history. Do not publish real 
 
 Then adopt the first tagged template release in MilkyWay. Implement the first infrastructure module only after repository safeguards and documentation/release behavior are established.
 
-## Decisions still required
+## Confirmed decisions and remaining setup
 
-- Template repository name and visibility.
-- GitHub organization plan: protected private organization repositories require a suitable paid plan, such as Team. Public repositories can use protection on Free. Do not change visibility or purchase a plan implicitly.
-- Read the Docs Community for public open-source documentation, or Business for private-repository integration. Decide documentation visibility explicitly.
+- Nebula is the public, language-independent project template under CafofoLabs.
+- MilkyWay and its documentation are public. Use Read the Docs Community; its account/repository integration still needs to be established.
+- Nimbus is the homelab consumer under TheAldersonProject. It starts private; do not publish its inventory or documentation through the public framework documentation.
+- MilkyWay main protection is configured: PR required, administrator enforcement, no force pushes or deletion, linear history, resolved conversations, and squash-only merging. Required CI checks are pending implementation.
+- Nimbus private-repository protection must be verified independently against the personal account's capabilities. Never change visibility or purchase a plan implicitly.
+- See the [first-stage execution plan](execution-plan.md) for sequencing and acceptance gates.
 
 ## Sources
 
