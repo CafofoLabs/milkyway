@@ -434,6 +434,8 @@ def prepare_pr(kind, bump="auto"):
         run(
             "git",
             "merge",
+            "-X",
+            "theirs",
             "origin/main",
             "-m",
             "chore(changelog): reconcile accepted history",
@@ -554,7 +556,7 @@ def template_update(ref):
     branch = "chore/template-update-" + (ref or "latest")
     validate_branch(branch)
     run("git", "switch", "-c", branch)
-    args = ["copier", "update", "--defaults", "--overwrite"]
+    args = ["copier", "update", "--defaults"]
     if ref:
         args += ["--vcs-ref", ref]
     run(*args)
