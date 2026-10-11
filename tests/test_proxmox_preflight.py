@@ -74,6 +74,8 @@ def test_ssh_requires_trusted_key_and_disables_forwarding():
     assert "StrictHostKeyChecking=yes" in args
     assert "BatchMode=yes" in args
     assert "ForwardAgent=no" in args
+    assert "ServerAliveInterval=30" in args
+    assert "ServerAliveCountMax=3" in args
     assert args[-1] == "python3 - --collect"
 
 

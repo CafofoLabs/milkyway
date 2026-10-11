@@ -24,3 +24,5 @@ Reboot is separate and never automatic. Check kernel changes as well as `reboot_
 References: [Proxmox repositories](https://github.com/proxmox/pve-docs/blob/master/pve-package-repos.adoc), [official update procedure](https://github.com/proxmox/pve-docs/blob/master/system-software-updates.adoc), and [pveupgrade implementation](https://github.com/proxmox/pve-manager/blob/master/bin/pveupgrade).
 
 The native CLI streams task progress before its final JSON task identifier. The adapter consumes only that final identifier and verifies the native task status. It does not pass the CLI formatter’s `--quiet` option, which suppresses the identifier. Progress output is captured and never forwarded to the caller.
+
+The upgrade window is four hours, with a small additional SSH collection margin. SSH keepalives detect broken connections during slow downloads. On a slow link, the former one-hour window could expire during package installation; a download-only interruption preserves the APT cache and must happen before dpkg starts. Do not interrupt an active package installation to change this window.
