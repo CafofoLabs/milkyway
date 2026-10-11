@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.3.1
+
+### Fixes
+- **proxmox:** preserve native refresh task output ([#15](https://github.com/CafofoLabs/milkyway/pull/15))
 ## v0.3.0
 
 ### Features
