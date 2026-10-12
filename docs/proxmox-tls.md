@@ -89,12 +89,16 @@ multiple issuers must not concurrently manage the same TXT record set.
 
 Check `systemctl status milkyway-proxmox-tls.service` and
 `systemctl list-timers milkyway-proxmox-tls.timer` for sanitized status. The
-helper intentionally logs only fixed status messages and one of the failure
-labels `dns-provider-auth`, `dns-propagation`, `network`, `acme-rate-limit`,
-`acme-rejected`, or `unknown`. Classification is diagnostic guidance, not proof
-of the provider's root cause. Raw provider output is never persisted. A failed timer leaves
-the current certificate in service; fix DNS connectivity, token validity or
-issuance limits before the certificate expires, then rerun the consumer command.
+helper invokes Lego with error-level text logging, so routine propagation INFO
+messages cannot mask the final error. Its only emitted diagnostics are fixed
+labels: `acme-rate-limit`, `acme-invalid-contact`, `acme-unauthorized`,
+`acme-caa`, `acme-dns`, `acme-rejected`, `dns-provider-auth`,
+`dns-provider-update`, `zone-discovery`, `propagation-timeout`, `network`,
+`dns-propagation`, or `unknown`. Specific ACME problem types take precedence
+over generic provider or DNS wording. Classification is diagnostic guidance,
+not proof of the provider's root cause. Raw provider output is never persisted.
+A failed timer leaves the current certificate in service; fix the reported
+condition before the certificate expires, then rerun the consumer command.
 Recovery from lost ACME state can require fresh issuance and consume CA limits.
 
 ## Verification

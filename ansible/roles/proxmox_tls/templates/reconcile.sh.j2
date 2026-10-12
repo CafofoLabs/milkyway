@@ -13,7 +13,7 @@ if [[ -z "${HOSTINGER_API_TOKEN_FILE:-}" || ! -r "$HOSTINGER_API_TOKEN_FILE" ]];
     exit 1
 fi
 # Never write raw provider responses: classify captured output in memory only.
-if acme_output=$({{ (proxmox_tls_binary_dir ~ '/lego') | quote }} run \
+if acme_output=$({{ (proxmox_tls_binary_dir ~ '/lego') | quote }} --log.level error --log.format text run \
     --path {{ proxmox_tls_state_dir | quote }} \
     --email {{ acme_email | quote }} --accept-tos \
     --server {{ proxmox_tls_ca_servers[proxmox_tls_ca_environment] | quote }} \
@@ -22,16 +22,34 @@ if acme_output=$({{ (proxmox_tls_binary_dir ~ '/lego') | quote }} run \
     unset acme_output
 else
     case "$acme_output" in
-        *[Rr]ate[Ll]imited*|*429*|*"too many certificates"*|*"too many requests"*)
+        *"urn:ietf:params:acme:error:rateLimited"*)
             failure_label=acme-rate-limit ;;
-        *401*|*403*|*[Uu]nauthorized*|*[Ff]orbidden*)
+        *"urn:ietf:params:acme:error:invalidContact"*|*"urn:ietf:params:acme:error:unsupportedContact"*)
+            failure_label=acme-invalid-contact ;;
+        *"urn:ietf:params:acme:error:unauthorized"*)
+            failure_label=acme-unauthorized ;;
+        *"urn:ietf:params:acme:error:caa"*)
+            failure_label=acme-caa ;;
+        *"urn:ietf:params:acme:error:dns"*)
+            failure_label=acme-dns ;;
+        *"urn:ietf:params:acme:error:"*)
+            failure_label=acme-rejected ;;
+        *"invalid authorization"*)
+            failure_label=acme-unauthorized ;;
+        *"HTTP 401"*|*"HTTP 403"*|*"status code: 401"*|*"status code: 403"*|*[Uu]nauthorized*|*[Ff]orbidden*|*"credentials information are missing"*)
             failure_label=dns-provider-auth ;;
-        *[Pp]ropagation*|*NXDOMAIN*|*REFUSED*|*"time limit exceeded"*|*"no TXT record"*|*"could not find zone"*|*"nameserver"*)
-            failure_label=dns-propagation ;;
+        *"hostinger: could not find zone"*|*"could not find the start of authority"*|*"could not find zone:"*)
+            failure_label=zone-discovery ;;
+        *"hostinger: update DNS records (add)"*)
+            failure_label=dns-provider-update ;;
+        *"time limit exceeded"*)
+            failure_label=propagation-timeout ;;
         *"i/o timeout"*|*"context deadline exceeded"*|*"connection refused"*|*"network is unreachable"*|*"no such host"*|*"dial tcp"*|*"TLS handshake timeout"*)
             failure_label=network ;;
-        *"urn:ietf:params:acme:error"*|*"invalid authorization"*)
-            failure_label=acme-rejected ;;
+        *[Rr]ate[Ll]imited*|*"HTTP 429"*|*"status code: 429"*|*"too many certificates"*|*"too many requests"*|*"Too Many Requests"*)
+            failure_label=acme-rate-limit ;;
+        *NXDOMAIN*|*REFUSED*|*SERVFAIL*|*"did not return the expected TXT record"*)
+            failure_label=dns-propagation ;;
         *) failure_label=unknown ;;
     esac
     unset acme_output
