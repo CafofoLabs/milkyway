@@ -1,0 +1,126 @@
+# authentik — self-contained identity provider stack.
+#
+# This file is intentionally standalone: copy this directory to any Docker host,
+# provide a `.env`, and run `docker compose up -d`.
+# Ansible ships this exact file to the target host — it is never templated, so
+# what you test locally is what runs in production.
+#
+# Since authentik 2025.10 there is no Redis dependency: caching, the embedded
+# outpost session store and websockets all live in PostgreSQL.
+# https://goauthentik.io/blog/2025-11-13-we-removed-redis/
+
+name: ${COMPOSE_PROJECT_NAME:-authentik}
+
+x-authentik-common: &authentik-common
+  image: ${AUTHENTIK_IMAGE:-ghcr.io/goauthentik/server}:${AUTHENTIK_TAG:?AUTHENTIK_TAG is required}
+  restart: unless-stopped
+  # authentik uses shared memory heavily for its Python workers.
+  shm_size: 512mb
+  env_file:
+    - .env
+  environment:
+    AUTHENTIK_POSTGRESQL__HOST: postgresql
+    AUTHENTIK_POSTGRESQL__NAME: ${PG_DB:-authentik}
+    AUTHENTIK_POSTGRESQL__USER: ${PG_USER:-authentik}
+    AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS:?PG_PASS is required}
+    AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:?AUTHENTIK_SECRET_KEY is required}
+  depends_on:
+    postgresql:
+      condition: service_healthy
+  networks:
+    - authentik
+  logging: &default-logging
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  postgresql:
+    image: docker.io/library/postgres:${PG_TAG:-16-alpine}
+    restart: unless-stopped
+    # Deliberately no `env_file: .env`. Compose reads `.env` for `${...}`
+    # interpolation regardless, so listing it here would add nothing except
+    # AUTHENTIK_SECRET_KEY and the bootstrap token/password to the database
+    # container's environment, where nothing reads them.
+    environment:
+      POSTGRES_DB: ${PG_DB:-authentik}
+      POSTGRES_USER: ${PG_USER:-authentik}
+      POSTGRES_PASSWORD: ${PG_PASS:?PG_PASS is required}
+      # Deterministic initdb settings so restores from backup always line up.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    # Dropping Redis moved caching onto PostgreSQL, which raised the connection
+    # count by roughly 50%. The stock limit of 100 is not enough headroom.
+    command:
+      - postgres
+      - -c
+      - max_connections=${PG_MAX_CONNECTIONS:-200}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    volumes:
+      - database:/var/lib/postgresql/data
+    networks:
+      - authentik
+    logging: *default-logging
+
+  server:
+    <<: *authentik-common
+    command: server
+    healthcheck:
+      test: ["CMD", "ak", "healthcheck"]
+      interval: 30s
+      timeout: 30s
+      retries: 5
+      # First boot runs every database migration from empty, which took ~10
+      # minutes on a 4-vCPU / 1.3 GiB VM. A short start_period makes the
+      # container flap to "unhealthy" before it has had a chance to come up.
+      # Docker ends the start period on the first success, so a generous value
+      # costs nothing once the instance is warm.
+      start_period: 600s
+    ports:
+      # Bind to BIND_ADDRESS so you can keep authentik private and terminate TLS
+      # at a reverse proxy. Default 0.0.0.0 keeps a bare `docker compose up` usable.
+      - "${BIND_ADDRESS:-0.0.0.0}:${COMPOSE_PORT_HTTP:-9000}:9000"
+      - "${BIND_ADDRESS:-0.0.0.0}:${COMPOSE_PORT_HTTPS:-9443}:9443"
+      # Prometheus metrics, on a separate port from the application and pinned
+      # to loopback regardless of BIND_ADDRESS. authentik serves this endpoint
+      # without authentication — it is on its own port precisely so that the
+      # reverse proxy in front of 9000 never routes to it — so the monitoring
+      # agent scrapes it locally and nothing else can reach it at all.
+      - "127.0.0.1:${COMPOSE_PORT_METRICS:-9300}:9300"
+    volumes:
+      - data:/data
+      - templates:/templates
+
+  worker:
+    <<: *authentik-common
+    command: worker
+    healthcheck:
+      test: ["CMD", "ak", "healthcheck"]
+      interval: 30s
+      timeout: 30s
+      retries: 5
+      start_period: 600s
+    # The worker runs as root so it can read the Docker socket and manage
+    # outpost containers. Drop the socket mount below if you never use
+    # Docker-hosted outposts, and this can run unprivileged.
+    user: root
+    volumes:
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+      - data:/data
+      - certs:/certs
+      - templates:/templates
+
+volumes:
+  database:
+  data:
+  certs:
+  templates:
+
+networks:
+  authentik:
+    name: ${COMPOSE_PROJECT_NAME:-authentik}

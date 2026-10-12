@@ -1,0 +1,10 @@
+# Managed by Ansible — do not edit by hand, do not commit.
+#
+# Written by the `authentik` role so `tofu apply` can authenticate against the
+# instance Ansible just deployed, with no manual token copying in between.
+#
+# OpenTofu loads every *.auto.tfvars in the directory, which is why this file
+# is named after its role: the `openbao` role writes its own alongside it, and
+# two roles sharing one file would race.
+authentik_url   = "{{ authentik_host_url }}"
+authentik_token = "{{ authentik_bootstrap_token }}"

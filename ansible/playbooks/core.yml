@@ -1,0 +1,16 @@
+---
+- name: Start the identity provider
+  hosts: authentik
+  become: true
+  roles: [authentik]
+
+- name: Start the independent vault
+  hosts: openbao
+  become: true
+  roles: [openbao]
+
+- name: Publish core endpoints privately with trusted TLS
+  hosts: traefik
+  become: true
+  serial: 1
+  roles: [traefik]

@@ -1,0 +1,214 @@
+#jinja2: trim_blocks: True, lstrip_blocks: True
+// Managed by Ansible — do not edit by hand.
+// Rendered from ansible/roles/alloy/templates/config.alloy.j2 on {{ inventory_hostname }}.
+//
+// One agent per host, pushing to the observability stack on
+// the infrastructure telemetry endpoints. Everything this file collects is labelled with
+// `host = "{{ inventory_hostname }}"` and `env = "{{ env_name }}"`, applied
+// once at the write components at the bottom rather than repeated per source
+// — so metrics and logs from this machine always agree on what to call it,
+// which is what makes it possible to pivot from a graph to the lines behind it.
+
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+// ---------------------------------------------------------------------------
+// Metrics — the host itself
+// ---------------------------------------------------------------------------
+// Reading through /rootfs rather than the container's own /proc and /sys.
+// Without these three paths the agent cheerfully reports on itself: one
+// filesystem, one interface, and a uptime measured from the last `docker
+// compose up`.
+prometheus.exporter.unix "host" {
+  rootfs_path = "/rootfs"
+  procfs_path = "/rootfs/proc"
+  sysfs_path  = "/rootfs/sys"
+
+  filesystem {
+    // Docker's overlay mounts are the same bytes as the underlying disk
+    // counted again, once per layer, and there can be hundreds of them.
+    mount_points_exclude = "^/(dev|proc|sys|run/credentials/.+|var/lib/docker/.+|snap/.+)($|/)"
+    fs_types_exclude     = "^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs)$"
+  }
+
+  netclass {
+    ignored_devices = "^(veth.*|docker.*|br-.*|lo)$"
+  }
+
+  netdev {
+    device_exclude = "^(veth.*|docker.*|br-.*|lo)$"
+  }
+
+  // Metrics from work that has already exited — a timer's job, a backup, an
+  // ingestion run. Prefixed with /rootfs because this path is opened by the
+  // process itself rather than resolved against rootfs_path above, and inside
+  // this container the host's filesystem is only there.
+  textfile {
+    directory = "/rootfs{{ alloy_textfile_dir }}"
+  }
+}
+
+discovery.relabel "host" {
+  targets = prometheus.exporter.unix.host.targets
+
+  // `job = "node"` is what rules/inventory.yml on the server matches against
+  // to decide this host has stopped reporting. Changing it here means changing
+  // it there.
+  rule {
+    target_label = "job"
+    replacement  = "node"
+  }
+
+  // Without this, `instance` is the exporter's internal address and every host
+  // in the fleet reports the same one.
+  rule {
+    target_label = "instance"
+    replacement  = "{{ inventory_hostname }}"
+  }
+}
+
+prometheus.scrape "host" {
+  targets         = discovery.relabel.host.output
+  forward_to      = [prometheus.remote_write.central.receiver]
+  scrape_interval = "{{ alloy_scrape_interval }}"
+}
+
+{% set scrape_targets = (alloy_scrape_targets | default([])) + (alloy_extra_scrape_targets | default([])) %}
+{% if scrape_targets | length > 0 %}
+// ---------------------------------------------------------------------------
+// Metrics — the services this host runs
+// ---------------------------------------------------------------------------
+// All loopback. Scraping locally is what lets each service keep its metrics
+// endpoint off the network entirely: OpenBao's is unauthenticated and would
+// otherwise be readable by anything on the tailnet, and authentik's is on a
+// port the reverse proxy does not route at all.
+prometheus.scrape "services" {
+  targets = [
+{% for target in scrape_targets %}
+    {
+      "__address__"      = "{{ target.address }}",
+      "__metrics_path__" = "{{ target.metrics_path | default('/metrics') }}",
+{% for key, value in (target.params | default({})).items() %}
+      "__param_{{ key }}" = "{{ value }}",
+{% endfor %}
+      "job"      = "{{ target.job }}",
+      "instance" = "{{ inventory_hostname }}",
+    },
+{% endfor %}
+  ]
+  forward_to      = [prometheus.remote_write.central.receiver]
+  scrape_interval = "{{ alloy_scrape_interval }}"
+}
+{% endif %}
+
+// ---------------------------------------------------------------------------
+// Logs
+// ---------------------------------------------------------------------------
+{% if alloy_collect_journal %}
+// The journal carries the things that have no container to log to: sshd
+// accepting a certificate, systemd starting a unit, the kernel's OOM killer.
+loki.relabel "journal" {
+  forward_to = []
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "level"
+  }
+}
+
+loki.source.journal "host" {
+  path          = "/var/log/journal"
+  max_age       = "{{ alloy_journal_max_age }}"
+  relabel_rules = loki.relabel.journal.rules
+  labels        = { job = "systemd-journal" }
+  forward_to    = [loki.write.central.receiver]
+}
+{% endif %}
+
+{% if alloy_collect_docker %}
+// Container output. Discovered rather than listed, so a new stack on this host
+// is collected without touching this file.
+discovery.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "30s"
+}
+
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  // Docker container names arrive with a leading slash.
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/?(.*)"
+    target_label  = "container"
+  }
+
+  // Which compose project it belongs to — `authentik`, `openbao`, `traefik`.
+  // This is the label worth having: it survives a container being recreated,
+  // which the container name does not always.
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "stack"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+}
+
+loki.source.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  targets          = discovery.relabel.containers.output
+  labels           = { job = "docker" }
+  forward_to       = [loki.write.central.receiver]
+  refresh_interval = "30s"
+}
+{% endif %}
+
+// ---------------------------------------------------------------------------
+// Where it all goes
+// ---------------------------------------------------------------------------
+prometheus.remote_write "central" {
+  external_labels = {
+    env  = "{{ env_name }}",
+    host = "{{ inventory_hostname }}",
+  }
+
+  endpoint {
+    url = "{{ alloy_metrics_url }}"
+
+    // Buffered on disk in the WAL when the far end is unreachable, which is
+    // what stops a Prometheus restart costing every host's metrics for its
+    // duration. These numbers are sized for a handful of hosts, not a fleet.
+    queue_config {
+      capacity             = 10000
+      max_samples_per_send = 2000
+      max_shards           = 10
+      min_backoff          = "30ms"
+      max_backoff          = "5s"
+    }
+  }
+
+  wal {
+    truncate_frequency = "2h"
+  }
+}
+
+loki.write "central" {
+  external_labels = {
+    env  = "{{ env_name }}",
+    host = "{{ inventory_hostname }}",
+  }
+
+  endpoint {
+    url = "{{ alloy_logs_url }}"
+  }
+}

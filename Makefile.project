@@ -27,3 +27,7 @@ host-lid-plan: ## Preview laptop lid behavior on an empty standalone Proxmox nod
 	$(RUN) python scripts/proxmox_lid.py plan --inventory "$(INVENTORY)"
 host-lid: ## Persist ignore-on-close lid behavior; activate with a separate reboot
 	$(RUN) python scripts/proxmox_lid.py apply --inventory "$(INVENTORY)"
+
+.PHONY: infrastructure-check
+infrastructure-check: ## Validate infrastructure with locked tools, synthetic inventory and mocked providers
+	uv run --frozen --project tools/infrastructure python scripts/check_infrastructure.py

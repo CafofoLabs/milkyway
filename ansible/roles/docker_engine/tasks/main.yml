@@ -1,0 +1,57 @@
+---
+# Installs Docker CE from the official repository. Safe to run against a host
+# that already has Docker — apt simply reports no change.
+
+- name: Check for an existing Docker installation
+  ansible.builtin.command:
+    cmd: docker --version
+  register: docker_version_check
+  failed_when: false
+  changed_when: false
+
+- name: Install Docker CE from the official repository
+  when: docker_version_check.rc != 0
+  block:
+    - name: Ensure keyring directory exists
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Add Docker GPG key
+      ansible.builtin.get_url:
+        url: "https://download.docker.com/linux/{{ ansible_distribution | lower }}/gpg"
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+
+    - name: Add Docker apt repository
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch={{ 'amd64' if ansible_architecture == 'x86_64' else 'arm64' }}
+          signed-by=/etc/apt/keyrings/docker.asc]
+          https://download.docker.com/linux/{{ ansible_distribution | lower }}
+          {{ docker_apt_release }} stable
+        filename: docker
+        state: present
+
+    - name: Install Docker packages
+      ansible.builtin.apt:
+        name: "{{ docker_packages }}"
+        state: present
+        update_cache: true
+
+- name: Ensure Docker is running and enabled
+  ansible.builtin.systemd:
+    name: docker
+    state: started
+    enabled: true
+
+# Skipped when Ansible connects without an explicit user (an ssh_config alias,
+# or root): there is no account to grant, and `user:` with an empty name is a
+# confusing failure rather than a no-op.
+- name: Add the deploy user to the docker group
+  ansible.builtin.user:
+    name: "{{ docker_group_user }}"
+    groups: docker
+    append: true
+  when: docker_group_user | length > 0

@@ -1,0 +1,29 @@
+---
+# Restarting a vault is not the routine act it is for the other stacks here,
+# which is why this is a handler rather than an unconditional step: it runs
+# only when openbao.hcl actually changed.
+#
+# What it costs while it happens: every certificate login on the platform,
+# since `make ssh` asks this vault to sign. What it does not cost is the seal —
+# the instance unseals itself from its key on local disk, so nothing has to be
+# typed and no human has to be present. The role waits for that below.
+- name: Restart openbao
+  no_log: true
+  community.docker.docker_compose_v2:
+    project_src: "{{ openbao_deploy_dir }}"
+    state: restarted
+
+# The restart returns as soon as the container is running, but a vault that is
+# up and still sealed serves nothing. Anything downstream — a signing request,
+# an OpenTofu apply — has to wait for this rather than for the container.
+- name: Wait for the vault to unseal itself after a restart
+  ansible.builtin.command:
+    cmd: >-
+      docker compose -f {{ openbao_deploy_dir }}/docker-compose.yml
+      exec -T openbao bao status
+  register: openbao_restart_status
+  until: openbao_restart_status.rc == 0
+  retries: 30
+  delay: 5
+  changed_when: false
+  listen: Restart openbao

@@ -1,0 +1,111 @@
+---
+# Adapted from Jarvis host_baseline; a missing join is a hard failure here.
+- name: Inspect existing Tailscale package
+  ansible.builtin.command: tailscale version
+  register: platform_tailscale_installed
+  failed_when: false
+  changed_when: false
+  check_mode: false
+
+- name: Install official Tailscale package when absent
+  when: platform_tailscale_installed.rc != 0
+  block:
+    - name: Create package keyring directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+    - name: Install Tailscale signing key
+      ansible.builtin.get_url:
+        url: "https://pkgs.tailscale.com/stable/debian/{{ ansible_distribution_release }}.noarmor.gpg"
+        dest: /etc/apt/keyrings/tailscale-archive-keyring.gpg
+        mode: "0644"
+    - name: Configure the official Tailscale repository
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/debian {{ ansible_distribution_release }} main"
+        filename: tailscale
+        state: present
+    - name: Install Tailscale
+      ansible.builtin.apt:
+        name: tailscale
+        state: present
+        update_cache: true
+
+- name: Ensure tailscaled is enabled
+  ansible.builtin.systemd_service:
+    name: tailscaled
+    state: started
+    enabled: true
+
+- name: Read current tailnet state without changing identity
+  ansible.builtin.command: tailscale status --json
+  register: platform_tailscale_before
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Enroll only a node that is not already running
+  when: >-
+    platform_tailscale_before.rc != 0 or
+    (platform_tailscale_before.stdout | default('{}', true) | from_json).get('BackendState', '') != 'Running'
+  block:
+    - name: Resolve enrollment credential through the selected source
+      ansible.builtin.include_role:
+        name: platform_credentials
+      vars:
+        platform_credential_bootstrap_file: "{{ platform_tailscale_key_file }}"
+        platform_credential_bao_path: "{{ platform_tailscale_secret_path }}"
+        platform_credential_field: key
+    - name: Create temporary enrollment key file
+      ansible.builtin.tempfile:
+        state: file
+        path: /run
+        prefix: milkyway-tailscale-
+      register: platform_tailscale_temp
+      no_log: true
+    - name: Enroll with a protected file instead of a secret argument
+      block:
+        - name: Write enrollment key
+          ansible.builtin.copy:
+            content: "{{ platform_resolved_credential }}"
+            dest: "{{ platform_tailscale_temp.path }}"
+            owner: root
+            group: root
+            mode: "0600"
+          no_log: true
+        - name: Join the tailnet without enabling routing or Tailscale SSH
+          ansible.builtin.command:
+            argv: >-
+              {{ ['tailscale', 'up', '--hostname=' ~ inventory_hostname,
+                  '--auth-key=file:' ~ platform_tailscale_temp.path,
+                  '--accept-routes=false', '--ssh=false'] +
+                 (['--advertise-tags=' ~ platform_tailscale_tags | join(',')]
+                  if platform_tailscale_tags | length > 0 else []) }}
+          no_log: true
+      always:
+        - name: Remove enrollment credential from the host
+          ansible.builtin.file:
+            path: "{{ platform_tailscale_temp.path }}"
+            state: absent
+          no_log: true
+        - name: Forget the enrollment value
+          ansible.builtin.set_fact:
+            platform_resolved_credential: ""
+          no_log: true
+
+- name: Require a working tailnet node
+  ansible.builtin.command: tailscale status --json
+  register: platform_tailscale_after
+  changed_when: false
+  retries: 12
+  delay: 5
+  until: >-
+    platform_tailscale_after.rc == 0 and
+    (platform_tailscale_after.stdout | from_json).get('BackendState', '') == 'Running' and
+    (platform_tailscale_after.stdout | from_json).get('Self', {}).get('Online', false)
+
+- name: Record discovered tailnet address
+  ansible.builtin.set_fact:
+    platform_tailnet_address: >-
+      {{ (platform_tailscale_after.stdout | from_json).TailscaleIPs
+         | reject('search', ':') | first }}

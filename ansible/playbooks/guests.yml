@@ -1,0 +1,9 @@
+---
+- name: Prepare private platform VMs
+  hosts: platform_vms
+  become: true
+  gather_facts: true
+  serial: 1
+  roles:
+    - platform_baseline
+    - docker_engine

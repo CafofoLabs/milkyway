@@ -1,0 +1,11 @@
+---
+proxmox_node: "{{ inventory_hostname }}"
+proxmox_api_user: milkyway@pve
+proxmox_api_token_name: provisioning
+proxmox_pool: milkyway
+proxmox_storage_ids: [local, local-lvm]
+proxmox_api_token_file: ""
+proxmox_tls_ca_file: ""
+proxmox_firewall_cutover: false
+platform_initial_management_cidr: ""
+platform_firewall_rollback_seconds: 180

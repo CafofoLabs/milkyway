@@ -1,0 +1,14 @@
+# Managed by MilkyWay; standalone host only.
+[OPTIONS]
+enable: 1
+policy_in: DROP
+policy_out: ACCEPT
+
+[RULES]
+IN ACCEPT -i tailscale0
+{% if not proxmox_firewall_cutover %}
+IN ACCEPT -source {{ platform_initial_management_cidr | milkyway_ipv4_cidr }} -p tcp -dport 22,8006
+{% endif %}
+IN ACCEPT -p udp -dport 41641
+# Explicit final DROP precedes implicit Proxmox LAN management exceptions.
+IN DROP

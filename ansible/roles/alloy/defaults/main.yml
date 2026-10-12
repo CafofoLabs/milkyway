@@ -1,0 +1,114 @@
+---
+# Whether this host runs the agent at all.
+#
+# On by default, and every host on the platform leaves it that way: a host that
+# is bootstrapped is a host that reports, with no per-host step that can be
+# forgotten and no machine that is quietly unmonitored. That rule is the whole
+# reason the agent is installed by `bootstrap.yml` rather than by a play of its
+# own.
+#
+# What this exists for is the case where the rule stops being true, which is a
+# host that is not on the tailnet. The agents push to a tailnet address — see
+# `alloy_metrics_url` below — so a host off it has an agent that cannot deliver
+# anything. That is not free and not quiet. Measured on a 3 GiB sandbox: a failed
+# batch logged every seventy seconds and then dropped, a write-ahead log holding
+# data that would never be delivered, and 1.8% of a core spent on it. `docker
+# stats` attributed about 500 MiB of the cgroup to the agent, of which roughly
+# 55 MiB came back as free memory when it was removed — the rest was page cache
+# counted against it.
+#
+# The fleets in `fleets/` are that case on purpose. A disposable sandbox is
+# deliberately not on the tailnet — joining is a browser click per host, per
+# rebase, and it leaves a stale node behind each time — and it is deliberately
+# absent from the inventory the alert rules are generated from, so its metrics
+# would be numbers nobody can act on. See docs/fleets.md.
+#
+# Setting this false on a host that already has the agent removes it, rather than
+# leaving one running. See tasks/absent.yml.
+alloy_enabled: true
+
+# Where the agent lives on the target host.
+alloy_deploy_dir: /opt/milkyway/alloy
+
+# Pinned deliberately, like every other image here.
+alloy_image_tag: "v1.18.0"
+alloy_compose_project: alloy
+
+# Alloy's own UI and readiness endpoint. Loopback only — it serves the running
+# configuration, which names every endpoint this agent writes to.
+alloy_http_port: 12345
+
+# Where this agent sends what it collects. Built from the inventory rather than
+# written out, so there is exactly one place that says which host runs the
+# observability stack: `observability_host` in group_vars/all.yml.
+#
+# Both are plain HTTP over the tailnet. See docs/observability.md, "What is
+# exposed and to whom", for why there is no credential on this path and what
+# that does and does not assume.
+alloy_metrics_url: ""
+alloy_logs_url: ""
+
+alloy_scrape_interval: "30s"
+
+# Where work that is over before a scrape could arrive leaves its metrics.
+#
+# A systemd timer's job cannot be scraped: by the time Prometheus asks, the
+# process has exited. The textfile collector is the standard answer — the job
+# writes a `.prom` file and this agent publishes it on the host's own metrics
+# endpoint, so the reading outlives the process that produced it.
+#
+# The conventional node_exporter path, because it is the one anyone writing
+# such a job will already reach for. Alloy reads it through the read-only
+# `/rootfs` mount it already has, so the container is granted nothing new.
+#
+# Created here and left empty. Ownership belongs to whoever writes into it —
+# see consumer workloads, its only writer today; a second writer running as a
+# different user is what turns that into a shared group.
+alloy_textfile_dir: /var/lib/node_exporter/textfile_collector
+
+# Local endpoints this host's agent should scrape, beyond the host itself.
+#
+# Empty by default and set per host in host_vars, because what a host runs is a
+# property of that host. Each entry is:
+#
+#   - job: openbao              # the `job` label on the resulting series
+#     address: 127.0.0.1:8200   # host:port, always loopback
+#     metrics_path: /v1/sys/metrics   # optional, defaults to /metrics
+#     params: {format: prometheus}    # optional query string
+#
+# Loopback on purpose. Scraping a service locally is what lets its metrics
+# endpoint stay unpublished — see the OpenBao telemetry note in
+# services/openbao/config/openbao.hcl.
+alloy_scrape_targets: []
+
+# The same thing, for targets that are true of a whole group rather than of one
+# host — Traefik's metrics port is the case this exists for, since every member
+# of the `traefik` group has one at the same address.
+#
+# Two variables rather than one because Ansible replaces rather than merges: a
+# host_vars list would silently discard whatever group_vars had set, and the
+# loss would show up as a missing graph weeks later. The role concatenates
+# these, so each can be set without knowing about the other.
+alloy_extra_scrape_targets: []
+
+# How far back to read the journal on a first start. Long enough to capture the
+# reboot that may have prompted the deploy, short enough that a host which has
+# been down for a week does not flood Loki on its way back.
+alloy_journal_max_age: "12h"
+
+# Log collection can be turned off per host without turning off metrics — the
+# gateway is the case this exists for, since it runs nothing worth reading.
+alloy_collect_journal: true
+alloy_collect_docker: true
+
+# Create /var/log/journal if it is missing, which is what makes systemd keep
+# the journal across a reboot. Without it the journal is in memory and the
+# reboot erases the lines that explain the reboot.
+#
+# Its own switch because it is the one change this role makes to the host
+# itself rather than to a container, and because it costs disk on a host where
+# that might not be wanted.
+alloy_persist_journal: true
+
+# Source checkout is independent of the consumer playbook location.
+milkyway_services_dir: "{{ role_path }}/../../../services"

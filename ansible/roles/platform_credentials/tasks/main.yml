@@ -1,0 +1,46 @@
+---
+- name: Validate explicit secret resolution mode
+  ansible.builtin.assert:
+    that:
+      - platform_access_mode in ['bootstrap', 'operational']
+      - platform_credential_bao_path | length > 0
+    fail_msg: Select bootstrap or operational credential resolution explicitly.
+
+- name: Load bootstrap credential from an opaque local file
+  ansible.builtin.set_fact:
+    platform_resolved_credential: "{{ lookup('ansible.builtin.file', platform_credential_bootstrap_file) | trim }}"
+  when: platform_access_mode == 'bootstrap'
+  no_log: true
+
+- name: Validate operational vault connection
+  ansible.builtin.assert:
+    that:
+      - platform_bao_addr is match('^https://')
+      - platform_bao_token_file | length > 0
+  when: platform_access_mode == 'operational'
+
+- name: Read operational credential from Bao only
+  ansible.builtin.uri:
+    url: "{{ platform_bao_addr }}/v1/secret/data/{{ platform_credential_bao_path }}"
+    headers:
+      X-Vault-Token: "{{ lookup('ansible.builtin.file', platform_bao_token_file) | trim }}"
+    return_content: true
+    status_code: 200
+    validate_certs: true
+  delegate_to: localhost
+  become: false
+  register: platform_credential_response
+  when: platform_access_mode == 'operational'
+  no_log: true
+
+- name: Select requested operational credential field
+  ansible.builtin.set_fact:
+    platform_resolved_credential: "{{ platform_credential_response.json.data.data[platform_credential_field] }}"
+  when: platform_access_mode == 'operational'
+  no_log: true
+
+- name: Require a credential before proceeding
+  ansible.builtin.assert:
+    that: platform_resolved_credential | length > 0
+    fail_msg: The requested credential is missing; no fallback is permitted.
+  no_log: true

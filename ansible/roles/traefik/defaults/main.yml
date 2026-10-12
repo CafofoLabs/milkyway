@@ -1,0 +1,75 @@
+---
+# Where the stack lives on the target host.
+traefik_deploy_dir: /opt/milkyway/traefik
+
+# Pinned deliberately. Traefik embeds lego, and which DNS providers exist is a
+# property of the lego version compiled in — an unpinned tag can silently
+# change that. The Hostinger provider was confirmed present in this one.
+traefik_image_tag: "v3.7.9"
+traefik_compose_project: traefik
+traefik_log_level: INFO
+
+# Bootstrap reads the explicit environment; normal operation reads OpenBao.
+traefik_bao_addr: "{{ platform_bao_addr | default(openbao_host_url) }}"
+traefik_dns_secret_mount: secret
+traefik_dns_secret_path: platform/hostinger/api
+traefik_dns_secret_field: token
+
+traefik_dns_api_token_env: "{{ lookup('ansible.builtin.env', 'HOSTINGER_API_TOKEN') if platform_access_mode == 'bootstrap' else '' }}"
+traefik_bao_token_file: "{{ platform_bao_token_file }}"
+
+# Address the proxy binds to. There is no sane default: 0.0.0.0 would publish
+# it on every interface the host has, so the inventory must say which one.
+traefik_bind_address: ""
+traefik_http_port: 80
+traefik_https_port: 443
+
+# Prometheus metrics, always on loopback and never on the published
+# entrypoint — scraped by the monitoring agent that runs on the same host.
+traefik_metrics_port: 8082
+
+# Routes this host serves, as a list of {name, host, backend}. Set per host in
+# host_vars — see inventories/*/host_vars/.
+traefik_routers: []
+
+# --- ACME -------------------------------------------------------------------
+acme_email: ""
+
+# "staging" or "production". Staging first: Let's Encrypt allows 5 duplicate
+# certificates per week, and a host that gets rebuilt a few times will burn
+# that quota and then be blocked for days.
+acme_ca_server: staging
+
+acme_ca_servers:
+  staging: https://acme-staging-v02.api.letsencrypt.org/directory
+  production: https://acme-v02.api.letsencrypt.org/directory
+
+# lego's provider name, and whatever environment variables that provider needs.
+# Kept a free-form map so the role never has to know about a specific provider.
+acme_dns_provider: ""
+acme_dns_credentials: {}
+
+# Nameservers lego queries to confirm the challenge record has propagated.
+#
+# These must be the zone's own authoritative servers — `dig NS <zone>` — and
+# there is deliberately no default, because every plausible default is wrong.
+# A public recursive resolver asked for _acme-challenge.<host> before the
+# record exists caches that NXDOMAIN for the zone's SOA minimum, which is
+# typically ten times longer than lego is willing to wait; each retry then
+# re-poisons it, and issuance can never succeed. The host's own resolver is
+# Tailscale's MagicDNS, which is not authoritative either.
+acme_dns_resolvers: ""
+
+# Some provider APIs acknowledge a write before serving it. Waiting once is
+# cheaper than finding out through a failed poll.
+acme_delay_before_checks: "15s"
+
+# How long to wait for the first certificate. DNS-01 issuance involves writing
+# a TXT record, waiting for it to propagate to public resolvers and then for
+# the CA to validate it, so this is minutes rather than seconds.
+traefik_cert_retries: 40
+traefik_cert_delay: 15
+
+# Source checkout is independent of the consumer playbook location.
+milkyway_services_dir: "{{ role_path }}/../../../services"
+milkyway_secrets_dir: "{{ platform_secret_files_dir }}"

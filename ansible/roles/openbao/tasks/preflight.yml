@@ -1,0 +1,60 @@
+---
+# Fail before anything is written. The expensive mistake here is a wrong
+# openbao_host_url: it is baked into redirects and into the OIDC redirect URIs
+# OpenTofu registers with authentik, so a wrong value produces a login flow
+# that fails only at the last hop.
+
+- name: Assert the environment is fully configured
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - env_name is defined
+      - env_name | length > 0
+    fail_msg: >-
+      `env_name` is not set. Every inventory needs it in group_vars/all.yml —
+      it selects the secrets directory (ansible/.secrets/<env_name>/) and the
+      OpenTofu environment that receives the generated root token.
+
+- name: Assert openbao_host_url is set and well-formed
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - openbao_host_url is defined
+      - openbao_host_url is string
+      - openbao_host_url is match('^https://[^/]+/?$')
+    fail_msg: >-
+      `openbao_host_url` must be a scheme and host with no path, for example
+      "https://bao.example.com".
+      Got: {{ openbao_host_url | default('<undefined>') }}
+
+- name: Assert the inventory placeholders have been replaced
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - "'example.com' not in openbao_host_url"
+    fail_msg: >-
+      This inventory still holds the shipped placeholders. Edit
+      inventories/{{ env_name }}/group_vars/openbao.yml, replacing every value
+      marked CHANGE ME, then re-run.
+
+
+- name: Read active swap devices
+  ansible.builtin.command:
+    cmd: swapon --show=NAME --noheadings
+  register: openbao_active_swap
+  changed_when: false
+
+- name: Assert the vault host has no swap
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - openbao_active_swap.stdout | trim | length == 0
+    fail_msg: >-
+      {{ inventory_hostname }} has swap active
+      ({{ openbao_active_swap.stdout_lines | join(', ') }}), and OpenBao runs
+      with disable_mlock = true because Raft storage makes mlock unusable
+      (openbao#354). Decrypted secrets and the master key can therefore be
+      paged to disk, where they survive a reboot and land in any disk image.
+      Set `swap_size_mb: 0` for this group, disable the device with
+      `swapoff -a` and remove it from /etc/fstab, then re-run. If you must keep
+      swap, encrypt it with a random key at every boot.

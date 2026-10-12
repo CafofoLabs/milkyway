@@ -1,0 +1,33 @@
+#!/usr/sbin/nft -f
+# {{ ansible_managed }}
+# Adapted from Jarvis; only our table is replaced, preserving Docker/Tailscale.
+add table inet milkyway
+delete table inet milkyway
+table inet milkyway {
+    chain input {
+        type filter hook input priority filter; policy drop;
+        ct state established,related accept
+        ct state invalid drop
+        iifname "lo" accept
+        iifname "tailscale0" accept
+        iifname "docker0" accept
+        iifname "br-*" accept
+{% if not host_firewall_cutover %}
+        ip saddr {{ platform_initial_management_cidr | milkyway_ipv4_cidr }} tcp dport 22 accept
+{% endif %}
+        udp sport 67 udp dport 68 accept
+        udp dport 41641 accept
+        meta l4proto ipv6-icmp accept
+        icmp type { destination-unreachable, time-exceeded, parameter-problem } accept
+    }
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+        ct state established,related accept
+        iifname "tailscale0" accept
+        iifname "docker0" accept
+        iifname "br-*" accept
+    }
+    chain output {
+        type filter hook output priority filter; policy accept;
+    }
+}

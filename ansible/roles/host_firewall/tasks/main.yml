@@ -1,0 +1,160 @@
+---
+- name: Require an explicit narrow bootstrap source
+  ansible.builtin.assert:
+    that:
+      - platform_initial_management_cidr | length > 0
+      - platform_initial_management_cidr | milkyway_ipv4_cidr != '0.0.0.0/0'
+  when: not host_firewall_cutover
+
+- name: Verify fresh tailnet access before removing LAN management
+  ansible.builtin.include_role:
+    name: ssh_access
+    tasks_from: verify
+  when: host_firewall_cutover
+
+- name: Install nftables
+  ansible.builtin.apt:
+    name: nftables
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create firewall configuration directory
+  ansible.builtin.file:
+    path: /etc/nftables.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Prepare a validated candidate ruleset
+  ansible.builtin.template:
+    src: milkyway.nft.j2
+    dest: /run/milkyway-firewall.candidate
+    owner: root
+    group: root
+    mode: "0600"
+    validate: /usr/sbin/nft -c -f %s
+  changed_when: false
+
+- name: Check whether managed guest rules exist
+  ansible.builtin.stat:
+    path: /etc/nftables.d/milkyway.nft
+    checksum_algorithm: sha256
+  register: host_firewall_existing
+
+- name: Inspect candidate checksum
+  ansible.builtin.stat:
+    path: /run/milkyway-firewall.candidate
+    checksum_algorithm: sha256
+  register: host_firewall_candidate
+
+- name: Install the isolated guest firewall boot unit
+  ansible.builtin.template:
+    src: milkyway-firewall.service.j2
+    dest: /etc/systemd/system/milkyway-firewall.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: host_firewall_unit
+
+- name: Apply changed rules with automatic rollback
+  when: >-
+    not ansible_check_mode and
+    host_firewall_existing.stat.get('checksum', '') != host_firewall_candidate.stat.checksum
+  block:
+    - name: Save previous rules without reading their contents
+      ansible.builtin.copy:
+        remote_src: true
+        src: /etc/nftables.d/milkyway.nft
+        dest: /run/milkyway-firewall.previous
+        mode: "0600"
+      when: host_firewall_existing.stat.exists
+    - name: Install rollback action independent of the SSH connection
+      ansible.builtin.copy:
+        dest: /run/milkyway-firewall-rollback.sh
+        mode: "0700"
+        content: |
+          #!/bin/sh
+          set -eu
+          {% if host_firewall_existing.stat.exists %}
+          cp /run/milkyway-firewall.previous /etc/nftables.d/milkyway.nft
+          /usr/sbin/nft -f /etc/nftables.d/milkyway.nft
+          {% else %}
+          /usr/sbin/nft delete table inet milkyway || true
+          rm -f /etc/nftables.d/milkyway.nft
+          systemctl disable milkyway-firewall.service
+          {% endif %}
+    - name: Arm rollback before loading rules
+      ansible.builtin.command:
+        argv:
+          - systemd-run
+          - --unit=milkyway-firewall-rollback
+          - --collect
+          - "--on-active={{ platform_firewall_rollback_seconds }}s"
+          - /run/milkyway-firewall-rollback.sh
+      changed_when: true
+    - name: Install candidate rules
+      ansible.builtin.copy:
+        remote_src: true
+        src: /run/milkyway-firewall.candidate
+        dest: /etc/nftables.d/milkyway.nft
+        mode: "0644"
+    - name: Load isolated rules
+      ansible.builtin.command: /usr/sbin/nft -f /etc/nftables.d/milkyway.nft
+      changed_when: true
+    - name: Prove a new connection survived the policy change
+      ansible.builtin.include_role:
+        name: ssh_access
+        tasks_from: verify
+      when: host_firewall_cutover
+    - name: Prove a new bootstrap connection survived the policy change
+      ansible.builtin.command:
+        argv:
+          - ssh
+          - -T
+          - -i
+          - "{{ platform_ssh_identity_file }}"
+          - -o
+          - IdentitiesOnly=yes
+          - -o
+          - BatchMode=yes
+          - -o
+          - StrictHostKeyChecking=yes
+          - -o
+          - ControlMaster=no
+          - -o
+          - ControlPath=none
+          - -o
+          - ConnectTimeout=10
+          - "{{ ansible_user | default('root') }}@{{ ansible_host }}"
+          - 'true'
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      when: not host_firewall_cutover
+    - name: Cancel rollback only after fresh verified access
+      ansible.builtin.systemd_service:
+        name: milkyway-firewall-rollback.timer
+        state: stopped
+    - name: Clear completed rollback unit state
+      ansible.builtin.command: systemctl reset-failed milkyway-firewall-rollback.service
+      changed_when: false
+      failed_when: false
+
+- name: Enable the managed guest firewall at boot
+  ansible.builtin.systemd_service:
+    name: milkyway-firewall
+    enabled: true
+    state: started
+    daemon_reload: "{{ host_firewall_unit.changed }}"
+
+- name: Remove temporary rollback files after success
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /run/milkyway-firewall.candidate
+    - /run/milkyway-firewall.previous
+    - /run/milkyway-firewall-rollback.sh
+  changed_when: false

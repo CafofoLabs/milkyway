@@ -1,0 +1,114 @@
+#jinja2: trim_blocks: True, lstrip_blocks: True
+# Managed by Ansible — do not edit by hand.
+# Rendered from ansible/roles/observability/templates/rules/platform.yml.j2.
+#
+# Alerts that apply to any host, plus a few that are specific to what this
+# platform runs. Kept short on purpose: an alert nobody would act on is noise
+# that trains people to ignore the ones they would.
+
+groups:
+  - name: host
+    rules:
+      - alert: DiskFillingUp
+        # Predicted to be full within four hours, based on the last hour's
+        # trend. A threshold on free space alone either fires too late on a
+        # large disk or too often on a small one; a trend does neither.
+        expr: |
+          predict_linear(node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs"}[1h], 4 * 3600) < 0
+          and node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs"} / node_filesystem_size_bytes < 0.2
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ '{{ $labels.host }}' }}: {{ '{{ $labels.mountpoint }}' }} will be full within four hours"
+          description: >-
+            {{ '{{ $labels.mountpoint }}' }} on {{ '{{ $labels.host }}' }} is at
+            {{ '{{ $value | printf "%.0f" }}' }} bytes and falling fast enough
+            to reach zero inside four hours.
+
+      - alert: DiskAlmostFull
+        expr: |
+          node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs"}
+          / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs"} < 0.10
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ '{{ $labels.host }}' }}: {{ '{{ $labels.mountpoint }}' }} is over 90% full"
+
+      - alert: MemoryPressure
+        # Available, not free: free excludes reclaimable page cache and would
+        # fire constantly on a healthy host.
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.10
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ '{{ $labels.host }}' }} has under 10% memory available"
+          description: >-
+            Sustained for 15 minutes. On this platform the usual consequence is
+            the OOM killer taking an authentik worker mid-migration — see the
+            host_baseline role's notes on swap.
+
+      - alert: HostClockSkew
+        # NTP drift breaks more than timestamps here: OIDC tokens carry `iat`
+        # and `nbf`, and a host far enough out rejects valid tokens with an
+        # error that names the signature rather than the clock.
+        expr: abs(node_timex_offset_seconds) > 0.5
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          # Single-quoted, and that matters: the Go template inside contains
+          # its own double quotes around the printf verb, which would close a
+          # double-quoted YAML scalar early and leave Prometheus refusing to
+          # load this whole file.
+          summary: '{{ '{{ $labels.host }}' }} clock is {{ '{{ $value | printf "%.1f" }}' }}s out'
+
+      - alert: HostRebooted
+        expr: node_time_seconds - node_boot_time_seconds < 600
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ '{{ $labels.host }}' }} rebooted in the last ten minutes"
+
+  - name: platform
+    rules:
+      - alert: OpenBaoSealed
+        # A sealed vault answers HTTP and serves nothing. It is the one failure
+        # here that stops every certificate login on the platform at once, so
+        # it has no `for` — the moment it is true it is worth knowing.
+        expr: openbao_core_unsealed == 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "OpenBao is sealed"
+          description: >-
+            No secret can be read and no SSH certificate can be signed while
+            this is true, so `make ssh` is down for everyone. The instance
+            auto-unseals from its seal key on start — if it has not, the key is
+            unreadable or the Raft data is damaged. See docs/runbook.md.
+
+      - alert: CertificateExpiringSoon
+        expr: (traefik_tls_certs_not_after - time()) / 86400 < 14
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          # Single-quoted for the same reason as HostClockSkew above.
+          summary: 'TLS certificate for {{ '{{ $labels.cn }}' }} expires in {{ '{{ $value | printf "%.0f" }}' }} days'
+          description: >-
+            Traefik renews at 30 days remaining, so under 14 means renewal has
+            been failing for a fortnight. The cause is almost always the DNS-01
+            challenge — check the Hostinger token and see docs/dns-and-tls.md.
+
+      - alert: TargetDown
+        # An exporter that is present but failing. Distinct from
+        # HostNotReporting in rules/inventory.yml, which is the host itself
+        # having gone silent.
+        expr: up == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ '{{ $labels.job }}' }} on {{ '{{ $labels.host }}' }} is not answering scrapes"

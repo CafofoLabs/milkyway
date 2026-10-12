@@ -1,0 +1,23 @@
+---
+- name: Harden SSH and restrict guest ingress after tailnet verification
+  hosts: platform_vms
+  become: true
+  serial: 1
+  roles:
+    - ssh_access
+    - role: host_firewall
+      host_firewall_cutover: true
+
+- name: Restrict Proxmox management after private access succeeds
+  hosts: proxmox
+  become: true
+  tasks:
+    - name: Harden the SSH transport
+      ansible.builtin.include_role:
+        name: ssh_access
+    - name: Restrict native management ingress
+      ansible.builtin.include_role:
+        name: proxmox_access
+        tasks_from: firewall
+      vars:
+        proxmox_firewall_cutover: true

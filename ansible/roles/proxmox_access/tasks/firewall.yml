@@ -1,0 +1,152 @@
+---
+- name: Require standalone Proxmox until cluster rules are supported
+  ansible.builtin.stat:
+    path: /etc/pve/corosync.conf
+  register: proxmox_cluster_configuration
+
+- name: Refuse to replace a clustered firewall policy
+  ansible.builtin.assert:
+    that: not proxmox_cluster_configuration.stat.exists
+    fail_msg: Cluster firewall management requires a separately approved policy.
+
+- name: Require an explicit bootstrap management source
+  ansible.builtin.assert:
+    that:
+      - platform_initial_management_cidr | length > 0
+      - platform_initial_management_cidr | milkyway_ipv4_cidr != '0.0.0.0/0'
+  when: not proxmox_firewall_cutover
+
+- name: Verify new tailnet access before cutting Proxmox LAN access
+  ansible.builtin.include_role:
+    name: ssh_access
+    tasks_from: verify
+  when: proxmox_firewall_cutover
+
+- name: Inspect existing cluster and node policy
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    checksum_algorithm: sha256
+  loop:
+    - /etc/pve/firewall/cluster.fw
+    - "/etc/pve/nodes/{{ proxmox_node }}/host.fw"
+  register: proxmox_firewall_before
+
+- name: Refuse to overwrite policies not created by MilkyWay
+  ansible.builtin.command:
+    argv: [head, -n, '1', "{{ item.item }}"]
+  register: proxmox_firewall_ownership
+  loop: "{{ proxmox_firewall_before.results }}"
+  when: item.stat.exists
+  changed_when: false
+  failed_when: "'Managed by MilkyWay' not in proxmox_firewall_ownership.stdout"
+
+- name: Write cluster candidate
+  ansible.builtin.copy:
+    dest: /run/milkyway-cluster.fw
+    content: |
+      # Managed by MilkyWay; standalone host only.
+      [OPTIONS]
+      enable: 1
+      policy_in: DROP
+      policy_out: ACCEPT
+    mode: "0600"
+  changed_when: false
+
+- name: Write node candidate
+  ansible.builtin.template:
+    src: host.fw.j2
+    dest: /run/milkyway-host.fw
+    mode: "0600"
+  changed_when: false
+
+- name: Inspect candidate checksums
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    checksum_algorithm: sha256
+  loop: [/run/milkyway-cluster.fw, /run/milkyway-host.fw]
+  register: proxmox_firewall_candidates
+
+- name: Reconcile native firewall with timed rollback
+  when: >-
+    not ansible_check_mode and
+    (proxmox_firewall_before.results[0].stat.get('checksum', '') != proxmox_firewall_candidates.results[0].stat.checksum or
+     proxmox_firewall_before.results[1].stat.get('checksum', '') != proxmox_firewall_candidates.results[1].stat.checksum)
+  block:
+    - name: Save existing policy files
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ item.item }}"
+        dest: "/run/milkyway-pve-previous-{{ index }}"
+        mode: "0600"
+      loop: "{{ proxmox_firewall_before.results }}"
+      loop_control:
+        index_var: index
+      when: item.stat.exists
+    - name: Install independent firewall rollback
+      ansible.builtin.copy:
+        dest: /run/milkyway-pve-rollback.sh
+        mode: "0700"
+        content: |
+          #!/bin/sh
+          set -eu
+          {% for entry in proxmox_firewall_before.results %}
+          {% if entry.stat.exists %}
+          cat /run/milkyway-pve-previous-{{ loop.index0 }} > {{ entry.item | quote }}
+          {% else %}
+          rm -f {{ entry.item | quote }}
+          {% endif %}
+          {% endfor %}
+          systemctl restart pve-firewall
+    - name: Arm native firewall rollback
+      ansible.builtin.command:
+        argv: [systemd-run, --collect, --unit=milkyway-pve-rollback, "--on-active={{ platform_firewall_rollback_seconds }}s", /run/milkyway-pve-rollback.sh]
+      changed_when: true
+    # pmxcfs owns file modes; avoid copy/chmod attempting to change them.
+    - name: Install native cluster policy without changing pmxcfs permissions
+      ansible.builtin.shell:
+        cmd: cat /run/milkyway-cluster.fw > /etc/pve/firewall/cluster.fw
+      changed_when: true
+    - name: Install native node policy without changing pmxcfs permissions
+      ansible.builtin.shell:
+        cmd: "cat /run/milkyway-host.fw > {{ ('/etc/pve/nodes/' ~ proxmox_node ~ '/host.fw') | quote }}"
+      changed_when: true
+    - name: Validate the native firewall configuration
+      ansible.builtin.command: pve-firewall compile
+      changed_when: false
+      register: proxmox_firewall_compile
+      failed_when: >-
+        proxmox_firewall_compile.rc != 0 or
+        'error' in (proxmox_firewall_compile.stderr | lower)
+    - name: Enable the native Proxmox firewall
+      ansible.builtin.systemd_service:
+        name: pve-firewall
+        state: restarted
+        enabled: true
+    - name: Confirm fresh private access after applying policy
+      ansible.builtin.include_role:
+        name: ssh_access
+        tasks_from: verify
+      when: proxmox_firewall_cutover
+    - name: Confirm fresh bootstrap access after applying policy
+      ansible.builtin.command:
+        argv: [ssh, -T, -i, "{{ platform_ssh_identity_file }}", -o, IdentitiesOnly=yes, -o, BatchMode=yes, -o, StrictHostKeyChecking=yes, -o, ControlMaster=no, -o, ControlPath=none, -o, ConnectTimeout=10, "{{ ansible_user | default('root') }}@{{ ansible_host }}", 'true']
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      when: not proxmox_firewall_cutover
+    - name: Cancel rollback after verified fresh access
+      ansible.builtin.systemd_service:
+        name: milkyway-pve-rollback.timer
+        state: stopped
+
+- name: Remove successful native firewall transaction files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /run/milkyway-cluster.fw
+    - /run/milkyway-host.fw
+    - /run/milkyway-pve-previous-0
+    - /run/milkyway-pve-previous-1
+    - /run/milkyway-pve-rollback.sh
+  changed_when: false

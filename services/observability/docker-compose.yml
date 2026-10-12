@@ -1,0 +1,172 @@
+# Observability — metrics, logs, dashboards and alerts for the whole platform.
+#
+# This file is intentionally standalone: copy this directory to any Docker
+# host, provide a `.env` and a `config/` directory, then
+# run `docker compose up -d`. Ansible ships this exact file to the target host
+# — it is never templated, so what you test locally is what runs.
+#
+# Two of these services listen on the tailnet rather than on loopback, and that
+# is the one thing here worth understanding before changing anything.
+# Prometheus and Loki are *written to* by an agent on every other host, so they
+# have to be reachable from those hosts; Grafana and Alertmanager are only ever
+# read by a human through the reverse proxy, so they stay on loopback. See
+# docs/observability.md, "What is exposed and to whom".
+
+name: ${COMPOSE_PROJECT_NAME:-observability}
+
+services:
+  # --- Metrics --------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:${PROMETHEUS_TAG:?PROMETHEUS_TAG is required}
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-30d}
+      - --storage.tsdb.retention.size=${PROMETHEUS_RETENTION_SIZE:-0}
+      - --web.external-url=${PROMETHEUS_EXTERNAL_URL:-http://localhost:9090}
+      # Agents push to this receiver rather than being scraped.
+      #
+      # The alternative — Prometheus scraping each host — needs a target list
+      # that is correct before a host can be observed, which makes adding a
+      # host two changes in two places. Pushing means a host that has been
+      # bootstrapped is already reporting, which is the property this platform
+      # wants everywhere else too. What it costs is that a host which vanishes
+      # simply stops appearing rather than going `up == 0`, so the "is it
+      # dead" alert has to be generated from the inventory instead of being
+      # free. That is done in rules/inventory.yml.
+      - --web.enable-remote-write-receiver
+      # Needed by Grafana's "Explore → Metrics" and by any dashboard that
+      # queries series metadata rather than samples.
+      - --web.enable-lifecycle
+    ports:
+      # Tailnet, not loopback: every other host writes here.
+      - "${BIND_ADDRESS:?BIND_ADDRESS is required}:${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./config/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # --- Logs -----------------------------------------------------------------
+  loki:
+    image: grafana/loki:${LOKI_TAG:?LOKI_TAG is required}
+    restart: unless-stopped
+    command: -config.file=/etc/loki/loki.yml
+    ports:
+      # Tailnet, for the same reason as Prometheus: the agents push here.
+      - "${BIND_ADDRESS}:${LOKI_PORT:-3100}:3100"
+    volumes:
+      - ./config/loki.yml:/etc/loki/loki.yml:ro
+      - loki-data:/loki
+    security_opt:
+      - no-new-privileges:true
+    # No healthcheck. Unlike the Prometheus and Alertmanager images next door,
+    # this one ships no HTTP client — no wget, no curl — and Loki has no health
+    # subcommand of its own, so the usual one-liner reports `unhealthy` forever
+    # while Loki is serving perfectly. The same applies to the Alloy agent; see
+    # services/alloy/docker-compose.yml.
+    #
+    # The Ansible role polls /ready from the host instead, which is the better
+    # test anyway: it proves the port is reachable from outside the container.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # --- Alerting -------------------------------------------------------------
+  alertmanager:
+    image: prom/alertmanager:${ALERTMANAGER_TAG:?ALERTMANAGER_TAG is required}
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --web.external-url=${ALERTMANAGER_EXTERNAL_URL:-http://localhost:9093}
+    ports:
+      # Loopback: only Prometheus on this host talks to it.
+      - "127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093"
+    volumes:
+      - ./config/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9093/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # --- Dashboards -----------------------------------------------------------
+  grafana:
+    image: grafana/grafana:${GRAFANA_TAG:?GRAFANA_TAG is required}
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+      - loki
+    env_file:
+      # Carries the OIDC client secret and the local admin password. Kept out
+      # of `environment:` below they remain credentials and must not be printed through Docker inspection.
+      - .env
+    environment:
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:?GRAFANA_ROOT_URL is required}
+      # Grafana sits behind Traefik, which terminates TLS. Without this it
+      # builds redirect URLs from its own listener and sends the browser to
+      # http:// mid-login.
+      GF_SERVER_ENFORCE_DOMAIN: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+    ports:
+      # Loopback: reached only through the reverse proxy on this host.
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# Named volumes rather than bind mounts, unlike the OpenBao stack next door.
+# Each of these images ships its data directory with a non-root owner baked in
+# — nobody for Prometheus, 10001 for Loki, 472 for Grafana — and a named volume
+# inherits that ownership on first mount, whereas a bind mount to a path Docker
+# has to create arrives owned by root and the service cannot write to it.
+#
+# The trade-off against OpenBao's choice is deliberate: that data is a vault
+# and belongs somewhere visible for backup, this data is reconstructible
+# telemetry. Losing it costs history, not secrets.
+volumes:
+  prometheus-data:
+  loki-data:
+  alertmanager-data:
+  grafana-data:

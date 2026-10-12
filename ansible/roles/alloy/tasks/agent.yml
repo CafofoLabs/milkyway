@@ -1,0 +1,162 @@
+---
+- name: Validate telemetry destinations
+  ansible.builtin.assert:
+    that:
+      - alloy_metrics_url | length > 0
+      - alloy_logs_url | length > 0
+    fail_msg: Supply the infrastructure metrics and logs endpoints before installing Alloy.
+  tags: [always]
+
+# systemd keeps the journal in memory unless this directory exists, which means
+# a reboot erases everything leading up to it — including whatever explains the
+# reboot. Creating it is what makes `Storage=auto` persistent, and it is the
+# one host change this role makes beyond running a container.
+- name: Enable a persistent journal
+  when: alloy_collect_journal and alloy_persist_journal
+  block:
+    - name: Check whether the journal is already persistent
+      ansible.builtin.stat:
+        path: /var/log/journal
+      register: alloy_journal_dir
+
+    - name: Create the persistent journal directory
+      when: not alloy_journal_dir.stat.exists
+      ansible.builtin.file:
+        path: /var/log/journal
+        state: directory
+        owner: root
+        group: systemd-journal
+        mode: "2755"
+
+    # journald only re-reads its storage location on restart, so without this
+    # the directory exists and the journal is still in memory until the next
+    # reboot — which is exactly the event it was created to survive.
+    - name: Restart journald so it starts writing to disk
+      when: not alloy_journal_dir.stat.exists
+      ansible.builtin.systemd_service:
+        name: systemd-journald
+        state: restarted
+
+- name: Create deployment directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+  loop:
+    - "{{ alloy_deploy_dir }}"
+    - "{{ alloy_deploy_dir }}/config"
+
+# Created here rather than by whichever job writes into it, so the collector
+# never points at a path that does not exist. Alloy notes that once at startup
+# and then says nothing — a quiet way to lose every metric a timer produces.
+#
+# 0755 and root-owned: readable by the agent, and deliberately writable by
+# nobody yet. The role whose job writes here takes ownership itself, next to
+# the reason for that particular user.
+#
+# Only when it is absent, and that guard is the whole point. `ansible.builtin.file`
+# enforces owner and mode on every run, so without it this task quietly took the
+# directory back from the writer each time the agent was deployed — and the
+# symptom is not a failure. The ingestion keeps running and succeeding; only its
+# metrics stop, and `IngestionStale` fires half an hour later pointing at a
+# service that is working. That happened on bragi on 2026-08-16, and the alert
+# is the only reason it was noticed.
+- name: Look for the directory metrics from exited work are left in
+  ansible.builtin.stat:
+    path: "{{ alloy_textfile_dir }}"
+  register: alloy_textfile_dir_stat
+
+- name: Create the directory for metrics from work that has already exited
+  ansible.builtin.file:
+    path: "{{ alloy_textfile_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: not alloy_textfile_dir_stat.stat.exists
+
+# Copied, never templated: the compose file in services/ is the single source
+# of truth and must stay runnable on its own.
+- name: Ship the compose stack
+  ansible.builtin.copy:
+    src: "{{ milkyway_services_dir }}/alloy/docker-compose.yml"
+    dest: "{{ alloy_deploy_dir }}/docker-compose.yml"
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Restart alloy
+
+- name: Render environment file
+  no_log: true
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ alloy_deploy_dir }}/.env"
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Restart alloy
+
+# Deliberately not validated with `validate:`. Alloy's only syntax checker is
+# the Alloy binary, so validating here means `docker run` per host on every
+# template change — which on a first deploy blocks the play behind an image
+# pull, and afterwards costs a container start to check a file rendered from
+# the same template that was already checked on every other host.
+#
+# What catches a malformed configuration instead is the readiness poll below:
+# Alloy refuses to start on one, so the container never reports ready and the
+# rescue block prints what it said. The check is a few seconds later and just
+# as loud.
+- name: Render the agent configuration
+  ansible.builtin.template:
+    src: config.alloy.j2
+    dest: "{{ alloy_deploy_dir }}/config/config.alloy"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart alloy
+
+- name: Pull the image and start the agent
+  community.docker.docker_compose_v2:
+    project_src: "{{ alloy_deploy_dir }}"
+    state: present
+    pull: missing
+    remove_orphans: true
+    wait: false
+  no_log: true
+
+- name: Apply pending restarts before checking readiness
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for the agent to report ready
+  block:
+    - name: Poll the readiness endpoint
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ alloy_http_port }}/-/ready"
+        status_code: 200
+      register: alloy_ready
+      until: alloy_ready.status == 200
+      retries: 20
+      delay: 5
+      changed_when: false
+  rescue:
+    - name: Collect what the agent logged
+      no_log: true
+      ansible.builtin.command:
+        cmd: "docker compose -f {{ alloy_deploy_dir }}/docker-compose.yml logs --tail=40"
+      register: alloy_logs
+      changed_when: false
+      failed_when: false
+
+    - name: Explain the readiness timeout
+      ansible.builtin.fail:
+        msg: >-
+          The Alloy agent on {{ inventory_hostname }} did not become ready.
+          A component that cannot reach its target does NOT stop the agent
+          starting, so this is usually a configuration error rather than a
+          connectivity one — connectivity shows up as a healthy agent whose
+          data never arrives.
+          .
+          The agent said:
+          Inspect the protected service logs on the host; logs are not copied into automation output.

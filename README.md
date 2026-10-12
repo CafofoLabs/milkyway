@@ -13,3 +13,5 @@ Run `make setup` to install development tools and hooks, then `make check`. See 
 
 - [Foundation plan](docs/foundation-plan.md)
 - [Brand assets](docs/branding.md)
+
+[Basic services](docs/services.md) · [Application contracts](docs/application-contracts.md)

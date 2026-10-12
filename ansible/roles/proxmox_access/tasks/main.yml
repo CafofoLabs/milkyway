@@ -1,0 +1,157 @@
+---
+- name: Require explicit local output paths and safe resource names
+  ansible.builtin.assert:
+    that:
+      - proxmox_api_token_file is match('^/')
+      - proxmox_tls_ca_file is match('^/')
+      - proxmox_api_user is match('^[a-zA-Z0-9_-]+@pve$')
+      - proxmox_api_token_name is match('^[a-zA-Z0-9_-]+$')
+      - proxmox_pool is match('^[a-zA-Z0-9_-]+$')
+      - proxmox_node is match('^[a-zA-Z0-9_-]+$')
+
+- name: Inspect Proxmox users
+  ansible.builtin.command: pvesh get /access/users --output-format json
+  register: proxmox_existing_users
+  changed_when: false
+
+- name: Create the provisioning API identity
+  ansible.builtin.command:
+    argv: [pvesh, create, /access/users, --userid, "{{ proxmox_api_user }}", --comment, MilkyWay provisioning]
+  when: proxmox_api_user not in (proxmox_existing_users.stdout | from_json | map(attribute='userid') | list)
+  changed_when: true
+
+- name: Inspect resource pools
+  ansible.builtin.command: pvesh get /pools --output-format json
+  register: proxmox_existing_pools
+  changed_when: false
+
+- name: Create dedicated platform VM pool
+  ansible.builtin.command:
+    argv: [pvesh, create, /pools, --poolid, "{{ proxmox_pool }}", --comment, MilkyWay platform resources]
+  when: proxmox_pool not in (proxmox_existing_pools.stdout | from_json | map(attribute='poolid') | list)
+  changed_when: true
+
+- name: Inspect access roles
+  ansible.builtin.command: pvesh get /access/roles --output-format json
+  register: proxmox_existing_roles
+  changed_when: false
+
+- name: Define narrowly scoped provisioning roles
+  ansible.builtin.set_fact:
+    proxmox_managed_roles:
+      - name: MilkyWayVM
+        path: "/pool/{{ proxmox_pool }}"
+        privileges: 'Pool.Allocate VM.Allocate VM.Audit VM.Clone VM.Config.CDROM VM.Config.CPU VM.Config.Cloudinit VM.Config.Disk VM.Config.HWType VM.Config.Memory VM.Config.Network VM.Config.Options VM.Console VM.Migrate VM.PowerMgmt'
+      - name: MilkyWayStorage
+        privileges: 'Datastore.AllocateSpace Datastore.AllocateTemplate Datastore.Audit'
+
+- name: Create missing provisioning roles
+  ansible.builtin.command:
+    argv: [pvesh, create, /access/roles, --roleid, "{{ item.name }}", --privs, "{{ item.privileges }}"]
+  loop: "{{ proxmox_managed_roles }}"
+  when: item.name not in (proxmox_existing_roles.stdout | from_json | map(attribute='roleid') | list)
+  changed_when: true
+
+- name: Inspect current provisioning role privileges
+  ansible.builtin.command:
+    argv: [pvesh, get, "/access/roles/{{ item.name }}", --output-format, json]
+  loop: "{{ proxmox_managed_roles }}"
+  register: proxmox_role_privileges
+  changed_when: false
+
+- name: Reconcile the declared provisioning role privileges
+  ansible.builtin.command:
+    argv: [pvesh, set, "/access/roles/{{ item.item.name }}", --privs, "{{ item.item.privileges }}"]
+  loop: "{{ proxmox_role_privileges.results }}"
+  when: >-
+    (item.stdout | from_json).keys() | sort != item.item.privileges.split() | sort
+  changed_when: true
+
+- name: Inspect provisioning ACLs
+  ansible.builtin.command: pvesh get /access/acl --output-format json
+  register: proxmox_existing_acls
+  changed_when: false
+
+- name: Grant dedicated pool VM management
+  ansible.builtin.command:
+    argv: [pvesh, set, /access/acl, --path, "/pool/{{ proxmox_pool }}", --users, "{{ proxmox_api_user }}", --roles, MilkyWayVM, --propagate, '1']
+  when: >-
+    proxmox_existing_acls.stdout | from_json
+    | selectattr('ugid', 'equalto', proxmox_api_user)
+    | selectattr('path', 'equalto', '/pool/' ~ proxmox_pool)
+    | selectattr('roleid', 'equalto', 'MilkyWayVM') | list | length == 0
+  changed_when: true
+
+- name: Grant node read access only
+  ansible.builtin.command:
+    argv: [pvesh, set, /access/acl, --path, "/nodes/{{ proxmox_node }}", --users, "{{ proxmox_api_user }}", --roles, PVEAuditor, --propagate, '1']
+  when: >-
+    proxmox_existing_acls.stdout | from_json
+    | selectattr('ugid', 'equalto', proxmox_api_user)
+    | selectattr('path', 'equalto', '/nodes/' ~ proxmox_node)
+    | selectattr('roleid', 'equalto', 'PVEAuditor') | list | length == 0
+  changed_when: true
+
+- name: Grant access to declared storage only
+  ansible.builtin.command:
+    argv: [pvesh, set, /access/acl, --path, "/storage/{{ item }}", --users, "{{ proxmox_api_user }}", --roles, MilkyWayStorage, --propagate, '1']
+  loop: "{{ proxmox_storage_ids }}"
+  when: >-
+    proxmox_existing_acls.stdout | from_json
+    | selectattr('ugid', 'equalto', proxmox_api_user)
+    | selectattr('path', 'equalto', '/storage/' ~ item)
+    | selectattr('roleid', 'equalto', 'MilkyWayStorage') | list | length == 0
+  changed_when: true
+
+- name: Inspect existing API tokens without reading their values
+  ansible.builtin.command:
+    argv: [pvesh, get, "/access/users/{{ proxmox_api_user }}/token", --output-format, json]
+  register: proxmox_existing_tokens
+  changed_when: false
+  no_log: true
+
+- name: Check whether the issued token is cached
+  ansible.builtin.stat:
+    path: "{{ proxmox_api_token_file }}"
+  delegate_to: localhost
+  become: false
+  register: proxmox_cached_token
+
+- name: Refuse to rotate a token whose local cache was lost
+  ansible.builtin.assert:
+    that: >-
+      proxmox_api_token_name not in
+      (proxmox_existing_tokens.stdout | from_json | map(attribute='tokenid') | list)
+      or proxmox_cached_token.stat.exists
+    fail_msg: The API token exists but its cache is missing. Recover or explicitly rotate it; automatic replacement is forbidden.
+
+- name: Create a missing provisioning token
+  ansible.builtin.command:
+    argv: [pvesh, create, "/access/users/{{ proxmox_api_user }}/token/{{ proxmox_api_token_name }}", --privsep, '0', --output-format, json]
+  register: proxmox_new_token
+  when: proxmox_api_token_name not in (proxmox_existing_tokens.stdout | from_json | map(attribute='tokenid') | list)
+  no_log: true
+  changed_when: true
+
+- name: Persist issued API token without displaying it
+  ansible.builtin.copy:
+    content: "{{ proxmox_api_user }}!{{ proxmox_api_token_name }}={{ (proxmox_new_token.stdout | from_json).value }}"
+    dest: "{{ proxmox_api_token_file }}"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  when: proxmox_new_token is not skipped
+  no_log: true
+
+- name: Fetch the public Proxmox root CA through the trusted SSH transport
+  ansible.builtin.fetch:
+    src: /etc/pve/pve-root-ca.pem
+    dest: "{{ proxmox_tls_ca_file }}"
+    flat: true
+
+- name: Protect the local CA file
+  ansible.builtin.file:
+    path: "{{ proxmox_tls_ca_file }}"
+    mode: "0600"
+  delegate_to: localhost
+  become: false

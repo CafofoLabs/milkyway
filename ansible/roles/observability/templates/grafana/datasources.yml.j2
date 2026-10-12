@@ -1,0 +1,52 @@
+#jinja2: trim_blocks: True, lstrip_blocks: True
+# Managed by Ansible — do not edit by hand.
+# Rendered from ansible/roles/observability/templates/grafana/datasources.yml.j2.
+#
+# Provisioned rather than added through the UI, so a rebuilt Grafana comes back
+# with the same data sources and the same UIDs — which matters because every
+# dashboard JSON in this role references them by UID.
+
+apiVersion: 1
+
+# Anything previously provisioned and no longer listed is removed, so this file
+# is the whole truth about what data sources exist.
+prune: true
+
+datasources:
+  - name: Prometheus
+    # Fixed, not generated. The dashboards reference this string.
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    # The compose service name and the CONTAINER port, not the published one.
+    # Grafana is a sibling container on this stack's network: `127.0.0.1` there
+    # is Grafana itself, and the published ports live on the host, which a
+    # bridged container cannot reach.
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      httpMethod: POST
+      timeInterval: {{ observability_scrape_interval }}
+      manageAlerts: false
+      prometheusType: Prometheus
+
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      maxLines: 1000
+      # Lets a log line link straight to the metrics for the host it came
+      # from — the two data sources share the `host` label because the agent
+      # attaches it to both.
+      derivedFields: []
+
+  - name: Alertmanager
+    uid: alertmanager
+    type: alertmanager
+    access: proxy
+    url: http://alertmanager:9093
+    jsonData:
+      implementation: prometheus
+      handleGrafanaManagedAlerts: false

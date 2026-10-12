@@ -1,0 +1,19 @@
+---
+komodo_deploy_dir: /opt/milkyway/komodo
+# The consumer selects exact tested releases; rolling tags are refused.
+komodo_image_tag: ""
+komodo_mongo_tag: ""
+komodo_compose_project: komodo
+komodo_port: 9120
+komodo_host_url: ""
+komodo_title: Komodo
+komodo_server_name: "{{ inventory_hostname }}"
+komodo_oidc_slug: komodo
+komodo_bao_addr: "{{ platform_bao_addr | default(openbao_host_url) }}"
+komodo_bao_token_file: "{{ platform_bao_token_file }}"
+komodo_secret_mount: secret
+komodo_secret_path: platform/komodo/oidc
+komodo_secrets_dir: "{{ milkyway_secrets_dir }}"
+milkyway_secrets_dir: "{{ platform_secret_files_dir }}"
+milkyway_services_dir: "{{ role_path }}/../../../services"
+milkyway_tofu_workdir: "{{ platform_tofu_workdir }}"

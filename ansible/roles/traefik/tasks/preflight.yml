@@ -1,0 +1,206 @@
+---
+# Fail before anything is written, not after a certificate silently fails to
+# issue. Every check here corresponds to a mistake that is cheap to make and
+# expensive to diagnose from Traefik's logs.
+
+- name: Assert a listening address was chosen
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - traefik_bind_address | length > 0
+      - traefik_bind_address not in ['0.0.0.0', '::']
+    fail_msg: >-
+      `traefik_bind_address` must name one interface address. This host runs
+      Traefik with host networking, so 0.0.0.0 would publish the proxy — and
+      everything behind it — on every network the host is attached to,
+      including the LAN. Set it to the host's Tailscale address in
+      inventories/{{ env_name }}/host_vars/{{ inventory_hostname }}.yml.
+
+- name: Assert this host has something to serve
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - traefik_routers | length > 0
+      - traefik_routers | map(attribute='host') | list | length == traefik_routers | length
+      - traefik_routers | map(attribute='backend') | list | length == traefik_routers | length
+    fail_msg: >-
+      `traefik_routers` is empty or malformed. Each entry needs `name`, `host`
+      and `backend`. A proxy with no routers answers 404 to everything, which
+      looks exactly like a broken backend.
+
+- name: Assert the ACME account is configured
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - acme_email | length > 0
+      - "'@' in acme_email"
+      - "'example.com' not in acme_email"
+    fail_msg: >-
+      `acme_email` must be a real address you can receive expiry warnings at.
+      Got: {{ acme_email | default('<undefined>') }}
+
+- name: Assert the propagation check has authoritative nameservers
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - acme_dns_resolvers | length > 0
+    fail_msg: >-
+      `acme_dns_resolvers` is empty. It must list the authoritative
+      nameservers for {{ platform_domain | default('the zone') }} —
+      `dig +short NS {{ platform_domain | default('<zone>') }}` — as
+      host:port, comma separated.
+      There is no default because a public recursive resolver caches the
+      NXDOMAIN it gets for _acme-challenge.<host> before the record is written,
+      for the zone's SOA minimum. That is far longer than lego waits, and every
+      retry renews it, so issuance deadlocks in a way whose only symptom is
+      "time limit exceeded".
+
+- name: Assert the CA server is one this role knows
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - acme_ca_server in acme_ca_servers
+    fail_msg: >-
+      `acme_ca_server` must be one of {{ acme_ca_servers.keys() | list | join(', ') }},
+      not a URL. Got: {{ acme_ca_server }}
+
+- name: Warn when issuing against the staging CA
+  ansible.builtin.debug:
+    msg: >-
+      NOTE: acme_ca_server is "staging", so certificates will be issued by
+      Let's Encrypt's staging CA and will NOT be trusted by browsers or by
+      OpenTofu's providers. That is intended while this host is still being
+      rebuilt — production has a limit of 5 duplicate certificates per week.
+      Set acme_ca_server to "production" when the flow is stable.
+  when: acme_ca_server == 'staging'
+
+# --- The DNS provider's token ------------------------------------------------
+# Read on the control node, never on the target: the host needs the value —
+# lego solves the DNS-01 challenge from inside the container — but it has no
+# business being able to fetch it. See the role's defaults for why this is a
+# `platform/` secret and not a `dev/` one.
+#
+# Skipped entirely when the environment already carries the token, so a CI run
+# or an explicit export never needs a vault session.
+- name: Require an explicit credential resolution mode
+  ansible.builtin.assert:
+    that:
+      - platform_access_mode in ['bootstrap', 'operational']
+    fail_msg: Select bootstrap for the initial environment or operational for Bao-managed credentials.
+
+- name: Read the DNS provider token from the vault
+  ansible.builtin.uri:
+    url: "{{ traefik_bao_addr }}/v1/{{ traefik_dns_secret_mount }}/data/{{ traefik_dns_secret_path }}"
+    headers:
+      X-Vault-Token: "{{ lookup('ansible.builtin.file', traefik_bao_token_file) | trim }}"
+    status_code: 200
+    return_content: true
+  register: traefik_dns_secret_read
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  no_log: true
+  when: platform_access_mode == 'operational' or traefik_dns_api_token_env | length == 0
+
+- name: Resolve the DNS provider token
+  ansible.builtin.set_fact:
+    traefik_dns_api_token: >-
+      {{ traefik_dns_api_token_env if traefik_dns_api_token_env | length > 0
+         else traefik_dns_secret_read.json.data.data[traefik_dns_secret_field] }}
+  no_log: true
+
+# The single most likely failure: the token resolved to an empty string, so
+# every issuance fails with an authentication error from the provider, minutes
+# after the deploy "succeeds".
+- name: Assert the DNS provider credentials are present
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - acme_dns_provider | length > 0
+      - acme_dns_credentials | length > 0
+      - acme_dns_credentials.values() | reject('none') | select('string') | select() | list | length
+        == acme_dns_credentials | length
+    fail_msg: >-
+      The DNS-01 credentials for provider "{{ acme_dns_provider | default('<unset>') }}"
+      are missing or empty: {{ acme_dns_credentials.keys() | list | join(', ') }}.
+      .
+      The token is read from
+      {{ traefik_dns_secret_mount }}/{{ traefik_dns_secret_path }} in the vault
+      at {{ traefik_bao_addr }}, unless HOSTINGER_API_TOKEN is already exported —
+      `make` exports it when the gitignored .env at the repo root holds a
+      `hostinger=` line, so an empty value here means neither exists.
+      .
+      "permission denied" from that read means you are authenticated as
+      something that cannot see `platform/`: the development AppRole is scoped
+      to `dev/` on purpose. Log in as a person — `make bao-login` — and re-run.
+      That login ends at a browser, and this control node has none, so open the
+      printed URL elsewhere.
+  no_log: true
+
+# The DNS records live in tofu/dns and the bind address lives in host_vars.
+# Nothing forces those two to agree, so check rather than assume: a mismatch
+# means ACME issues a certificate for a name that points somewhere else, and
+# the failure surfaces as an unexplained connection timeout.
+#
+# This ran `getent ahostsv4` until 2026-08-15, which is glibc's tool and does
+# not exist on macOS — where every deploy from this control node starts. The
+# `command` module runs no shell, so the missing binary came back as rc 2 with
+# an empty stderr, and the assert below turned that into "it does not resolve
+# at all — run `make dns` first". Correct-looking, entirely wrong, and it sent
+# the operator to re-apply a zone that was already right.
+#
+# So: the interpreter Ansible is already running on, which is present by
+# definition. Same system resolver getent consulted, same space-separated
+# addresses on stdout, and a non-zero exit now really does mean the name did
+# not resolve.
+- name: Resolve the hostnames this proxy will serve
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - -c
+      - |
+        import socket, sys
+        addrs = {a[4][0] for a in socket.getaddrinfo(sys.argv[1], None, socket.AF_INET)}
+        print(" ".join(sorted(addrs)))
+      - "{{ item.host }}"
+  register: traefik_router_dns
+  changed_when: false
+  failed_when: false
+  loop: "{{ traefik_routers }}"
+  loop_control:
+    label: "{{ item.host }}"
+  delegate_to: localhost
+  become: false
+
+- name: Assert every hostname resolves to this host's proxy address
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - item.rc == 0
+      - item.stdout is search('(^|\s)' ~ (traefik_bind_address | regex_escape) ~ '(\s|$)')
+    fail_msg: >-
+      {{ item.item.host }} does not resolve to {{ traefik_bind_address }}, the
+      address Traefik will bind on {{ inventory_hostname }}.
+      {{ 'It does not resolve at all — run `make dns` first; that root module owns the zone.'
+         if item.rc != 0
+         else 'It resolves to: ' ~ (item.stdout_lines | join(' | ')) ~ '. Reconcile
+               tofu/dns/variables.tf with host_vars/' ~ inventory_hostname ~ '.yml.' }}
+  loop: "{{ traefik_router_dns.results }}"
+  loop_control:
+    label: "{{ item.item.host }}"
+
+- name: Require a Tailscale IPv4 listener
+  ansible.builtin.assert:
+    that:
+      - traefik_bind_address is match('^100[.](6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])[.][0-9]{1,3}[.][0-9]{1,3}$')
+    fail_msg: Bind user-facing infrastructure listeners only to the enrolled Tailscale address.
+
+- name: Keep vault metrics local to its monitoring agent
+  ansible.builtin.assert:
+    that:
+      - "'/v1/sys/metrics' in item.block_paths | default([])"
+    fail_msg: OpenBao metrics are unauthenticated and must be blocked by its reverse proxy router.
+  loop: "{{ traefik_routers }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.name == 'openbao'

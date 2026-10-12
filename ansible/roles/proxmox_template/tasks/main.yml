@@ -1,0 +1,219 @@
+---
+- name: Validate template identity and image pin
+  ansible.builtin.assert:
+    that:
+      - proxmox_template_id | int >= 100
+      - proxmox_template_id | int <= 999999999
+      - proxmox_template_image_sha512 is match('^[a-f0-9]{128}$')
+      - proxmox_template_image_version is match('^[0-9]{8}-[0-9]+$')
+      - proxmox_template_image_url is match('^https://cloud[.]debian[.]org/images/cloud/trixie/[0-9]{8}-[0-9]+/debian-13-genericcloud-amd64-[0-9]{8}-[0-9]+[.]qcow2$')
+      - proxmox_pool | length > 0
+      - proxmox_datastore | length > 0
+      - proxmox_bridge | length > 0
+    fail_msg: The template requires an immutable official Debian image and checksum.
+
+- name: Calculate immutable template marker and vendor filename
+  ansible.builtin.set_fact:
+    proxmox_template_vendor_sha256: "{{ lookup('ansible.builtin.file', role_path ~ '/files/vendor-data.yml', rstrip=false) | hash('sha256') }}"
+
+- name: Set expected template marker
+  ansible.builtin.set_fact:
+    proxmox_template_marker: "MilkyWay Debian 13 {{ proxmox_template_image_version }} image-sha512:{{ proxmox_template_image_sha512 }} vendor-sha256:{{ proxmox_template_vendor_sha256 }}"
+    proxmox_template_vendor_filename: "milkyway-{{ proxmox_template_image_version }}-{{ proxmox_template_vendor_sha256[:12] }}-vendor.yml"
+
+- name: Inspect cluster VM IDs before making changes
+  ansible.builtin.command:
+    argv: [pvesh, get, /cluster/resources, --type, vm, --output-format, json]
+  register: proxmox_template_vm_list
+  changed_when: false
+  check_mode: false
+
+- name: Find the existing template identity
+  ansible.builtin.set_fact:
+    proxmox_template_existing: "{{ (proxmox_template_vm_list.stdout | from_json) | selectattr('vmid', 'equalto', proxmox_template_id | int) | list }}"
+
+- name: Refuse an ID owned by another node or a container
+  ansible.builtin.assert:
+    that:
+      - proxmox_template_existing | length == 0 or (proxmox_template_existing | length == 1 and proxmox_template_existing[0].node == proxmox_node_name and proxmox_template_existing[0].type == 'qemu')
+    fail_msg: The requested template ID is occupied by a different node or resource.
+
+- name: Inspect the existing template without logging its configuration
+  ansible.builtin.command:
+    argv: [pvesh, get, "/nodes/{{ proxmox_node_name }}/qemu/{{ proxmox_template_id }}/config", --output-format, json]
+  register: proxmox_template_existing_config
+  changed_when: false
+  check_mode: false
+  no_log: true
+  when: proxmox_template_existing | length > 0
+
+- name: Refuse partial templates, different image pins or configuration
+  ansible.builtin.assert:
+    that:
+      - config.template | default(0) | int == 1
+      - config.description | default('') == proxmox_template_marker
+      - config.ciupgrade | default(1) | int == 0
+      - config.scsihw | default('') == 'virtio-scsi-single'
+      - config.cicustom | default('') == 'vendor=' ~ proxmox_template_snippet_datastore ~ ':snippets/' ~ proxmox_template_vendor_filename
+      - config.scsi0 | default('') is match('^' ~ (proxmox_datastore | regex_escape) ~ ':')
+      - config.net0 | default('') is search('bridge=' ~ (proxmox_bridge | regex_escape) ~ '(,|$)')
+    fail_msg: Existing template differs or is incomplete. Inspect it before approving recovery; it will not be replaced or deleted.
+    quiet: true
+  vars:
+    config: "{{ proxmox_template_existing_config.stdout | from_json }}"
+  no_log: true
+  when: proxmox_template_existing | length > 0
+
+- name: Read the directory-backed snippet datastore
+  ansible.builtin.command:
+    argv: [pvesh, get, "/storage/{{ proxmox_template_snippet_datastore }}", --output-format, json]
+  register: proxmox_template_storage_result
+  changed_when: false
+  check_mode: false
+
+- name: Select snippet storage configuration
+  ansible.builtin.set_fact:
+    proxmox_template_storage: "{{ proxmox_template_storage_result.stdout | from_json }}"
+
+- name: Require local directory-backed snippet storage
+  ansible.builtin.assert:
+    that:
+      - proxmox_template_storage.type == 'dir'
+      - proxmox_template_storage.path is match('^/')
+      - not (proxmox_template_storage.shared | default(0) | bool)
+    fail_msg: Bootstrap snippets require an existing local directory datastore.
+
+- name: Enable snippets without dropping existing content types
+  ansible.builtin.command:
+    argv:
+      - pvesm
+      - set
+      - "{{ proxmox_template_snippet_datastore }}"
+      - --content
+      - "{{ ((proxmox_template_storage.content | default('') | split(',')) | reject('equalto', '') | list + ['snippets']) | unique | sort | join(',') }}"
+  changed_when: true
+  when: "'snippets' not in (proxmox_template_storage.content | default('') | split(','))"
+
+- name: Create snippet directory
+  ansible.builtin.file:
+    path: "{{ proxmox_template_storage.path }}/snippets"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Persist immutable vendor-data for future clones
+  ansible.builtin.copy:
+    src: vendor-data.yml
+    dest: "{{ proxmox_template_storage.path }}/snippets/{{ proxmox_template_vendor_filename }}"
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Create verified new template
+  when: proxmox_template_existing | length == 0
+  block:
+    - name: Create cloud image cache
+      ansible.builtin.file:
+        path: "{{ proxmox_template_storage.path }}/template/cache"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Download immutable official image and verify SHA512
+      ansible.builtin.get_url:
+        url: "{{ proxmox_template_image_url }}"
+        dest: "{{ proxmox_template_storage.path }}/template/cache/debian-13-genericcloud-amd64-{{ proxmox_template_image_version }}.qcow2"
+        checksum: "sha512:{{ proxmox_template_image_sha512 }}"
+        owner: root
+        group: root
+        mode: '0644'
+        timeout: 60
+
+    - name: Create unbooted template candidate
+      ansible.builtin.command:
+        argv:
+          - qm
+          - create
+          - "{{ proxmox_template_id | string }}"
+          - --name
+          - "milkyway-debian-13-{{ proxmox_template_image_version }}"
+          - --description
+          - "{{ proxmox_template_marker }}"
+          - --pool
+          - "{{ proxmox_pool }}"
+          - --memory
+          - '1024'
+          - --cores
+          - '1'
+          - --scsihw
+          - virtio-scsi-single
+          - --net0
+          - "virtio,bridge={{ proxmox_bridge }},firewall=1"
+          - --agent
+          - enabled=1,fstrim_cloned_disks=1
+          - --ostype
+          - l26
+      changed_when: true
+
+    - name: Import verified root disk
+      ansible.builtin.command:
+        argv:
+          - qm
+          - set
+          - "{{ proxmox_template_id | string }}"
+          - --scsi0
+          - "{{ proxmox_datastore }}:0,import-from={{ proxmox_template_storage.path }}/template/cache/debian-13-genericcloud-amd64-{{ proxmox_template_image_version }}.qcow2,discard=on,iothread=1,ssd=1,cache=none,aio=io_uring"
+      changed_when: true
+
+    - name: Configure cloud-init and serial console
+      ansible.builtin.command:
+        argv:
+          - qm
+          - set
+          - "{{ proxmox_template_id | string }}"
+          - --ide2
+          - "{{ proxmox_datastore }}:cloudinit"
+          - --boot
+          - order=scsi0
+          - --serial0
+          - socket
+          - --vga
+          - serial0
+          - --ciupgrade
+          - '0'
+          - --cicustom
+          - "vendor={{ proxmox_template_snippet_datastore }}:snippets/{{ proxmox_template_vendor_filename }}"
+      changed_when: true
+
+    - name: Convert candidate to template without booting it
+      ansible.builtin.command:
+        argv: [qm, template, "{{ proxmox_template_id | string }}"]
+      changed_when: true
+
+- name: Read final template configuration
+  ansible.builtin.command:
+    argv: [pvesh, get, "/nodes/{{ proxmox_node_name }}/qemu/{{ proxmox_template_id }}/config", --output-format, json]
+  register: proxmox_template_final
+  changed_when: false
+  check_mode: false
+  no_log: true
+  when: not ansible_check_mode or proxmox_template_existing | length > 0
+
+- name: Verify final template identity and first-boot contract
+  ansible.builtin.assert:
+    that:
+      - config.template | int == 1
+      - config.description == proxmox_template_marker
+      - config.ciupgrade | int == 0
+      - config.agent is search('(^|,)(enabled=)?1(,|$)')
+      - config.cicustom == 'vendor=' ~ proxmox_template_snippet_datastore ~ ':snippets/' ~ proxmox_template_vendor_filename
+      - config.ide2 is search('media=cdrom')
+      - config.boot == 'order=scsi0'
+    quiet: true
+    fail_msg: Template verification failed. No VM replacement or automatic cleanup will be attempted.
+  vars:
+    config: "{{ proxmox_template_final.stdout | from_json }}"
+  no_log: true
+  when: not ansible_check_mode or proxmox_template_existing | length > 0

@@ -1,0 +1,108 @@
+---
+- name: Verify private services and collected telemetry
+  hosts: localhost
+  tags: [services]
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Require explicit live verification targets
+      ansible.builtin.assert:
+        that:
+          - platform_verify_urls | length > 0
+          - platform_verify_oidc | length > 0
+          - platform_prometheus_url | length > 0
+          - platform_loki_url | length > 0
+
+    - name: Verify trusted HTTPS endpoints without bypassing certificate checks
+      ansible.builtin.uri:
+        url: "{{ item.url }}"
+        status_code: "{{ item.status_codes | default([200]) }}"
+        ca_path: "{{ item.ca_path | default(omit) }}"
+        validate_certs: true
+        follow_redirects: none
+      loop: "{{ platform_verify_urls }}"
+
+    - name: Verify OIDC discovery documents
+      ansible.builtin.uri:
+        url: "{{ item.discovery_url }}"
+        status_code: 200
+        validate_certs: true
+        return_content: true
+      loop: "{{ platform_verify_oidc }}"
+      register: platform_oidc_documents
+
+    - name: Verify the advertised OIDC issuer and signing keys endpoint
+      ansible.builtin.assert:
+        that:
+          - item.json.issuer == item.item.issuer
+          - item.json.jwks_uri is match('^https://')
+          - item.json.authorization_endpoint is match('^https://')
+          - item.json.token_endpoint is match('^https://')
+      loop: "{{ platform_oidc_documents.results }}"
+
+    - name: Verify unauthenticated Grafana login redirects to the IDP
+      ansible.builtin.uri:
+        url: "{{ platform_grafana_url }}/login/generic_oauth"
+        status_code: [302, 303, 307]
+        validate_certs: true
+        follow_redirects: none
+      register: platform_grafana_login
+
+    - name: Require the configured Authentik authorization endpoint
+      ansible.builtin.assert:
+        that: platform_grafana_login.location.startswith(platform_authentik_url + '/')
+
+    - name: Require host metrics from every managed machine
+      ansible.builtin.uri:
+        url: >-
+          {{ platform_prometheus_url }}/api/v1/query?query={{ ('node_uname_info{env="' ~ env_name ~ '"}') | urlencode }}
+        status_code: 200
+        return_content: true
+      register: platform_metrics_probe
+      retries: 15
+      delay: 5
+      until: >-
+        platform_metrics_probe.status == 200 and
+        (groups.get('proxmox', []) + groups.get('platform_vms', [])) | difference(
+          platform_metrics_probe.json.data.result | map(attribute='metric.host') | list) | length == 0
+
+    # A metric query proves ingestion without fetching journal lines that may contain secrets.
+    - name: Require recent journal or container logs from every managed machine
+      ansible.builtin.uri:
+        url: >-
+          {{ platform_loki_url }}/loki/api/v1/query?query={{ ('sum by (host)(count_over_time({env="' ~ env_name ~ '"}[15m]))') | urlencode }}
+        status_code: 200
+        return_content: true
+      register: platform_logs_probe
+      retries: 15
+      delay: 5
+      until: >-
+        platform_logs_probe.status == 200 and
+        (groups.get('proxmox', []) + groups.get('platform_vms', [])) | difference(
+          platform_logs_probe.json.data.result | map(attribute='metric.host') | list) | length == 0
+
+- name: Verify the authorized private transport and closed LAN management
+  hosts: proxmox:platform_vms
+  tags: [network]
+  gather_facts: false
+  tasks:
+    - name: Verify new authorized tailnet SSH access
+      ansible.builtin.include_role:
+        name: ssh_access
+        tasks_from: verify
+
+    - name: Require retained bootstrap LAN address for negative verification
+      ansible.builtin.assert:
+        that: platform_lan_address is defined
+        fail_msg: Retain the original LAN address as platform_lan_address for negative checks.
+
+    - name: Require new LAN management connections to fail
+      ansible.builtin.wait_for:
+        host: "{{ platform_lan_address }}"
+        port: "{{ item }}"
+        state: stopped
+        connect_timeout: 1
+        timeout: 3
+      delegate_to: localhost
+      become: false
+      loop: "{{ [22, 8006] if inventory_hostname in groups.get('proxmox', []) else [22, 443] }}"

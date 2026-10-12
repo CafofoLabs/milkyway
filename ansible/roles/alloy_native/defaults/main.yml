@@ -1,0 +1,12 @@
+---
+alloy_native_version: "1.18.0"
+alloy_native_sha256: "92f4c950aec4ec16a7fdbf6f805be4334d4d5fbbe458eecf514319c1c491bef4"
+alloy_metrics_url: ""
+alloy_logs_url: ""
+alloy_scrape_interval: "30s"
+alloy_textfile_dir: /var/lib/node_exporter/textfile_collector
+alloy_scrape_targets: []
+alloy_extra_scrape_targets: []
+alloy_journal_max_age: "12h"
+alloy_collect_journal: true
+alloy_collect_docker: false

@@ -1,0 +1,21 @@
+#jinja2: trim_blocks: True, lstrip_blocks: True
+# Managed by Ansible — do not edit by hand.
+# Rendered from ansible/roles/observability/templates/grafana/dashboards.yml.j2.
+
+apiVersion: 1
+
+providers:
+  - name: milkyway
+    orgId: 1
+    folder: Platform
+    type: file
+    # Edits made in the UI are discarded on the next restart. That is the point
+    # of provisioning them: a dashboard is a file in this repository, reviewed
+    # like anything else, and "it looked different yesterday" has an answer in
+    # git rather than in someone's memory.
+    disableDeletion: false
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false
