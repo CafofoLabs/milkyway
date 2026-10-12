@@ -3,4 +3,6 @@
   hosts: proxmox
   become: true
   gather_facts: true
-  roles: [proxmox_guest_startup]
+  roles:
+    - role: proxmox_guest_startup
+      when: proxmox_guest_startup | default([]) | length > 0

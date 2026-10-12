@@ -1,5 +1,5 @@
 variable "node_name" {
-  description = "Existing Proxmox node that holds the template and guests."
+  description = "Default Proxmox node for guests without an explicit node."
   type        = string
 
   validation {
@@ -65,6 +65,7 @@ variable "hosts" {
   description = "Infrastructure VMs keyed by consumer-chosen hostname; application guests are outside this initial module."
   type = map(object({
     vm_id         = number
+    node          = optional(string)
     role          = string
     address       = string
     memory_mb     = number
@@ -77,6 +78,11 @@ variable "hosts" {
   validation {
     condition     = alltrue([for name, host in var.hosts : can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", name)) && contains(["identity", "vault", "platform"], host.role)])
     error_message = "Each hostname must be a lowercase DNS label and role must be identity, vault or platform."
+  }
+
+  validation {
+    condition     = alltrue([for host in var.hosts : host.node == null ? true : can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", host.node))])
+    error_message = "An explicit guest node must be a lowercase DNS label."
   }
 
   validation {

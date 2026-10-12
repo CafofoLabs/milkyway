@@ -86,3 +86,34 @@ run "reject_duplicate_vm_ids" {
   }
   expect_failures = [var.hosts]
 }
+
+run "explicit_destination_preserves_guest_identity" {
+  command = plan
+  variables {
+    hosts = {
+      test-idp = { vm_id = 101, node = "destination-node", role = "identity", address = "192.0.2.20", memory_mb = 4096, vcpus = 4, disk_gb = 40 }
+    }
+  }
+  assert {
+    condition     = output.hosts["test-idp"].node_name == "destination-node" && output.hosts["test-idp"].vm_id == 101 && proxmox_virtual_environment_vm.this["test-idp"].migrate
+    error_message = "Placement must select the destination without changing the VM ID and enable in-place migration."
+  }
+}
+
+run "default_destination_is_unchanged" {
+  command = plan
+  assert {
+    condition     = output.hosts["test-idp"].node_name == "test-node" && proxmox_virtual_environment_vm.this["test-idp"].migrate
+    error_message = "Omitting node must preserve the existing default destination."
+  }
+}
+
+run "reject_invalid_destination" {
+  command = plan
+  variables {
+    hosts = {
+      test-idp = { vm_id = 101, node = "../other-node", role = "identity", address = "192.0.2.20", memory_mb = 4096, vcpus = 4, disk_gb = 40 }
+    }
+  }
+  expect_failures = [var.hosts]
+}
