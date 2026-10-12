@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.6.5
+
+### Fixes
+- **security:** preserve tailnet-only firewall reconciliation ([#40](https://github.com/CafofoLabs/milkyway/pull/40))
 ## v0.6.4
 
 ### Fixes
