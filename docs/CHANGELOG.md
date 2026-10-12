@@ -2,10 +2,13 @@
 
 Generated from merged PR titles preserved in squash commits.
 
-## v0.5.0
+## Unreleased
 
 ### Features
 - **platform:** reuse Jarvis services with Proxmox provisioning ([#24](https://github.com/CafofoLabs/milkyway/pull/24))
+
+### Fixes
+- **release:** install native tooling before publication checks ([#27](https://github.com/CafofoLabs/milkyway/pull/27))
 ## v0.4.0
 
 ### Features
