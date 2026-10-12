@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## Unreleased
+
+### Features
+- **proxmox:** configure laptop lid behavior idempotently ([#21](https://github.com/CafofoLabs/milkyway/pull/21))
 ## v0.3.2
 
 ### Fixes
