@@ -1,0 +1,76 @@
+#!/bin/bash
+# Managed by MilkyWay. Credential values remain inside Lego, never in arguments.
+set -euo pipefail
+umask 077
+
+exec 9>{{ proxmox_tls_lock_file | quote }}
+if ! flock -w 60 9; then
+    echo 'Another certificate reconciliation is still running.' >&2
+    exit 1
+fi
+if [[ -z "${HOSTINGER_API_TOKEN_FILE:-}" || ! -r "$HOSTINGER_API_TOKEN_FILE" ]]; then
+    echo 'The systemd DNS credential file is unavailable.' >&2
+    exit 1
+fi
+# Debug/provider output can contain sensitive HTTP responses; retain only status.
+if ! {{ (proxmox_tls_binary_dir ~ '/lego') | quote }} run \
+    --path {{ proxmox_tls_state_dir | quote }} \
+    --email {{ acme_email | quote }} --accept-tos \
+    --server {{ proxmox_tls_ca_servers[proxmox_tls_ca_environment] | quote }} \
+    --domains {{ proxmox_tls_fqdn | quote }} --dns hostinger \
+    --dns.resolvers {{ acme_dns_resolvers | quote }} >/dev/null 2>&1; then
+    echo 'ACME issuance or renewal failed; the installed certificate was preserved.' >&2
+    exit 1
+fi
+{% if proxmox_tls_ca_environment == 'production' %}
+certificate={{ (proxmox_tls_state_dir ~ '/certificates/' ~ proxmox_tls_fqdn ~ '.crt') | quote }}
+private_key={{ (proxmox_tls_state_dir ~ '/certificates/' ~ proxmox_tls_fqdn ~ '.key') | quote }}
+installed={{ proxmox_tls_installed_certificate | quote }}
+
+if ! openssl verify -purpose sslserver -verify_hostname {{ proxmox_tls_fqdn | quote }} \
+    -CApath {{ proxmox_tls_ca_path | quote }} -untrusted "$certificate" "$certificate" >/dev/null 2>&1; then
+    echo 'The candidate certificate failed trust or hostname validation.' >&2
+    exit 1
+fi
+if ! certificate_key=$(openssl x509 -in "$certificate" -pubkey -noout 2>/dev/null \
+    | openssl pkey -pubin -outform DER 2>/dev/null | sha256sum); then
+    echo 'The candidate certificate could not be inspected.' >&2
+    exit 1
+fi
+if ! private_key_public=$(openssl pkey -in "$private_key" -pubout -outform DER 2>/dev/null | sha256sum); then
+    echo 'The candidate private key could not be inspected.' >&2
+    exit 1
+fi
+if [[ "$certificate_key" != "$private_key_public" ]]; then
+    echo 'The candidate certificate and key do not match.' >&2
+    exit 1
+fi
+expected=$(openssl x509 -in "$certificate" -noout -fingerprint -sha256)
+served_matches() {
+    local actual
+    actual=$(timeout 10 openssl s_client -connect 127.0.0.1:8006 \
+        -servername {{ proxmox_tls_fqdn | quote }} -verify_return_error \
+        -verify_hostname {{ proxmox_tls_fqdn | quote }} -ignore_unexpected_eof \
+        </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256 2>/dev/null) || return 1
+    [[ "$actual" == "$expected" ]]
+}
+if cmp -s "$certificate" "$installed" && served_matches; then
+    echo 'The current certificate is already installed and trusted.'
+    exit 0
+fi
+if ! pvenode cert set "$certificate" "$private_key" --force 1 --restart 1 >/dev/null 2>&1; then
+    echo 'Proxmox certificate installation failed; reconciliation will retry.' >&2
+    exit 1
+fi
+for attempt in {1..30}; do
+    if served_matches; then
+        echo 'The Proxmox certificate was installed and verified.'
+        exit 0
+    fi
+    sleep 2
+done
+echo 'Proxmox did not serve the expected trusted certificate after installation.' >&2
+exit 1
+{% else %}
+echo 'The staging certificate was obtained; Proxmox was not modified.'
+{% endif %}

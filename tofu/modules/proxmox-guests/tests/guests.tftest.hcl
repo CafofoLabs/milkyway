@@ -47,6 +47,15 @@ run "infrastructure_contract" {
   }
 }
 
+run "startup_is_owned_by_ansible" {
+  command = plan
+
+  assert {
+    condition     = length(proxmox_virtual_environment_vm.this["test-idp"].startup) == 0
+    error_message = "The scoped API identity must never configure privileged host startup ordering."
+  }
+}
+
 run "reject_unrelated_workloads" {
   command = plan
   variables {

@@ -1,0 +1,8 @@
+---
+- name: Configure native Proxmox TLS after private DNS registration
+  hosts: proxmox
+  become: true
+  gather_facts: true
+  serial: 1
+  roles:
+    - proxmox_tls

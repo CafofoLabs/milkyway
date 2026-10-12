@@ -1,0 +1,3 @@
+---
+proxmox_node: "{{ inventory_hostname }}"
+proxmox_guest_startup: []

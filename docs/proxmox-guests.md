@@ -21,9 +21,9 @@ The consumer owns template preparation, credentials, provider/backend configurat
 | `network` | IPv4 `prefix_length`, `gateway`, `nameservers`, optional `search_domain`. |
 | `hosts` | Map keyed by hostname: `vm_id`, `role`, `address`, `memory_mb`, `vcpus`, `disk_gb`, optional `cpu_type` and `startup_order`. |
 
-Roles are `identity`, `vault` and `platform`. Guest IDs and IPv4 addresses must be unique; addresses must belong to the gateway subnet and exclude its network, broadcast and gateway addresses. Reserve them outside the DHCP pool. Defaults are `x86-64-v2-AES` for the CPU and `30` for startup order; the consumer chooses an earlier order for identity and vault. CPU compatibility across future nodes must be checked before migration.
+Roles are `identity`, `vault` and `platform`. Guest IDs and IPv4 addresses must be unique; addresses must belong to the gateway subnet and exclude its network, broadcast and gateway addresses. Reserve them outside the DHCP pool. The default CPU is `x86-64-v2-AES`. The optional `startup_order` records consumer intent; the consumer passes it to the [guest startup role](proxmox-guest-startup.md). Proxmox requires global `Sys.Modify` to set startup order, so Ansible owns this field through trusted root SSH and the scoped API module ignores it. CPU compatibility across future nodes must be checked before migration.
 
-Each VM receives a full clone, a raw root disk, fixed RAM, a VirtIO network interface with Proxmox firewall support, static cloud-init networking, the bootstrap public key and QEMU-agent IPv4 readiness checks. Proxmox firewall support alone does not install filtering rules; the baseline must configure them before service exposure. Startup delays sequence boot attempts, not service health.
+Each VM receives a full clone, a raw root disk, fixed RAM, a VirtIO network interface with Proxmox firewall support, static cloud-init networking, the bootstrap public key and QEMU-agent IPv4 readiness checks. Proxmox firewall support alone does not install filtering rules; the baseline must configure them before service exposure. The guest startup role configures boot delays separately; they sequence boot attempts, not service health.
 
 ## Execution and outputs
 
@@ -31,7 +31,7 @@ Run the consumer's Makefile plan/apply targets from Nimbus. Do not execute this 
 
 1. Prepare and verify the template through the consumer's Ansible bootstrap.
 2. Initialize the consumer root and review its saved OpenTofu plan.
-3. Apply that approved plan, then wait for cloud-init and independently verify SSH host identity before Ansible connects.
+3. Apply that approved plan, reconcile guest startup order through the hypervisor, then wait for cloud-init and independently verify SSH host identity before Ansible connects.
 4. Configure guest baselines and deploy services through Ansible.
 5. Repeat the OpenTofu plan; without drift it must show no changes.
 

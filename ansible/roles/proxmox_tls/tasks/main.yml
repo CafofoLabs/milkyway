@@ -1,0 +1,168 @@
+---
+- name: Validate certificate inputs before touching the host
+  ansible.builtin.assert:
+    that:
+      - ansible_architecture == 'x86_64'
+      - proxmox_tls_lego_version == '5.5.2'
+      - proxmox_tls_lego_sha256 == '2a35505089e7772c92e1e9ac144df91151ef2eca8568630db0ff91fca06d9bef'
+      - proxmox_tls_fqdn is match('^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$')
+      - proxmox_tls_fqdn | length <= 253
+      - acme_email | default('') is match('^[^\s@]+@[^\s@]+\.[^\s@]+$')
+      - acme_dns_resolvers | default('') is match('^[a-zA-Z0-9.-]+:53(?:,[a-zA-Z0-9.-]+:53)*$')
+      - proxmox_tls_ca_environment in proxmox_tls_ca_servers
+      - proxmox_tls_propagation_timeout | int >= 60
+      - proxmox_tls_propagation_timeout | int <= 1800
+    fail_msg: Native Proxmox TLS requires the pinned amd64 Lego release, a FQDN, ACME email and authoritative DNS servers.
+
+- name: Reject unsafe systemd and shell paths
+  ansible.builtin.assert:
+    that:
+      - item is match('^/[a-zA-Z0-9._/-]+$')
+      - "'/../' not in item"
+    quiet: true
+  loop:
+    - "{{ proxmox_tls_config_dir }}"
+    - "{{ proxmox_tls_state_root }}"
+    - "{{ proxmox_tls_binary_dir }}"
+    - "{{ proxmox_tls_script }}"
+    - "{{ proxmox_tls_lock_file }}"
+    - "{{ proxmox_tls_installed_certificate }}"
+    - "{{ proxmox_tls_ca_path }}"
+
+- name: Require native Proxmox certificate management
+  ansible.builtin.command:
+    argv: [pvenode, help, cert, set]
+  changed_when: false
+
+- name: Install native certificate prerequisites
+  ansible.builtin.apt:
+    name: [ca-certificates, openssl, tar, coreutils, util-linux]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create private certificate and credential directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  loop:
+    - "{{ proxmox_tls_config_dir }}"
+    - "{{ proxmox_tls_state_root }}"
+    - "{{ proxmox_tls_state_dir }}"
+
+- name: Create pinned binary and helper directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ proxmox_tls_binary_dir }}"
+    - "{{ proxmox_tls_script | dirname }}"
+
+- name: Download official Lego with a pinned checksum
+  ansible.builtin.get_url:
+    url: "https://github.com/go-acme/lego/releases/download/v{{ proxmox_tls_lego_version }}/lego_v{{ proxmox_tls_lego_version }}_linux_amd64.tar.gz"
+    dest: "/var/cache/milkyway-lego-{{ proxmox_tls_lego_version }}-linux-amd64.tar.gz"
+    checksum: "sha256:{{ proxmox_tls_lego_sha256 }}"
+    mode: "0644"
+
+- name: Extract the verified Lego binary
+  ansible.builtin.unarchive:
+    src: "/var/cache/milkyway-lego-{{ proxmox_tls_lego_version }}-linux-amd64.tar.gz"
+    dest: "{{ proxmox_tls_binary_dir }}"
+    remote_src: true
+    creates: "{{ proxmox_tls_binary_dir }}/lego"
+    include: [lego]
+
+- name: Ensure the verified binary is executable
+  ansible.builtin.file:
+    path: "{{ proxmox_tls_binary_dir }}/lego"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Resolve DNS credentials through the existing explicit access contract
+  ansible.builtin.include_role:
+    name: platform_credentials
+  vars:
+    platform_credential_bootstrap_file: "{{ platform_hostinger_key_file }}"
+    platform_credential_bao_path: "{{ proxmox_tls_dns_secret_path }}"
+    platform_credential_field: "{{ proxmox_tls_dns_secret_field }}"
+
+- name: Cache a root-only credential for renewal independently of Bao
+  ansible.builtin.copy:
+    content: "{{ platform_resolved_credential }}"
+    dest: "{{ proxmox_tls_config_dir }}/hostinger_api_token"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  diff: false
+
+- name: Clear the temporary DNS credential fact
+  ansible.builtin.set_fact:
+    platform_resolved_credential: ""
+    platform_credential_response: {}
+  no_log: true
+
+- name: Render the native certificate reconciliation helper
+  ansible.builtin.template:
+    src: reconcile.sh.j2
+    dest: "{{ proxmox_tls_script }}"
+    owner: root
+    group: root
+    mode: "0750"
+    validate: /bin/bash -n %s
+
+- name: Install independent certificate service and timer
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/milkyway-proxmox-tls.{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [service, timer]
+
+- name: Read the current certificate digest without loading its contents
+  ansible.builtin.stat:
+    path: "{{ proxmox_tls_installed_certificate if proxmox_tls_ca_environment == 'production' else proxmox_tls_state_dir ~ '/certificates/' ~ proxmox_tls_fqdn ~ '.crt' }}"
+    checksum_algorithm: sha256
+  register: proxmox_tls_before
+
+- name: Run issuance or reconciliation with systemd-provided credentials
+  ansible.builtin.systemd_service:
+    name: milkyway-proxmox-tls.service
+    state: started
+    daemon_reload: true
+  changed_when: false
+
+- name: Read the reconciled certificate digest
+  ansible.builtin.stat:
+    path: "{{ proxmox_tls_installed_certificate if proxmox_tls_ca_environment == 'production' else proxmox_tls_state_dir ~ '/certificates/' ~ proxmox_tls_fqdn ~ '.crt' }}"
+    checksum_algorithm: sha256
+  register: proxmox_tls_after
+  changed_when: >-
+    proxmox_tls_after.stat.checksum | default('') !=
+    proxmox_tls_before.stat.checksum | default('')
+
+- name: Enable automatic renewal only for the production certificate
+  ansible.builtin.systemd_service:
+    name: milkyway-proxmox-tls.timer
+    enabled: "{{ proxmox_tls_ca_environment == 'production' }}"
+    state: "{{ 'started' if proxmox_tls_ca_environment == 'production' else 'stopped' }}"
+    daemon_reload: true
+
+- name: Verify native HTTPS trust and the requested hostname
+  ansible.builtin.uri:
+    url: "https://{{ proxmox_tls_fqdn }}:8006/"
+    status_code: 200
+    validate_certs: true
+    use_proxy: false
+  delegate_to: localhost
+  become: false
+  when: proxmox_tls_ca_environment == 'production'

@@ -88,14 +88,10 @@ resource "proxmox_virtual_environment_vm" "this" {
     type = "l26"
   }
 
-  startup {
-    order      = each.value.startup_order
-    up_delay   = 30
-    down_delay = 60
-  }
-
   lifecycle {
     prevent_destroy = true
+    # Proxmox requires global Sys.Modify for startup; trusted Ansible owns it.
+    ignore_changes = [startup]
 
     precondition {
       condition     = can(regex("^ssh-ed25519 [A-Za-z0-9+/]+={0,2}( .*|)$", local.operator_public_key))

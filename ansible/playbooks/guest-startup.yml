@@ -1,0 +1,6 @@
+---
+- name: Reconcile host-owned guest startup ordering
+  hosts: proxmox
+  become: true
+  gather_facts: true
+  roles: [proxmox_guest_startup]
