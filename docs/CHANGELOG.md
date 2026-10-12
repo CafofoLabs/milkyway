@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.6.4
+
+### Fixes
+- **bootstrap:** hand guest runtime configuration to Ansible ([#38](https://github.com/CafofoLabs/milkyway/pull/38))
 ## v0.6.3
 
 ### Fixes
