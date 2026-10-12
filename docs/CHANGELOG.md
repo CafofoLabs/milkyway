@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.6.3
+
+### Fixes
+- **platform:** reconcile guest hostnames from inventory ([#36](https://github.com/CafofoLabs/milkyway/pull/36))
 ## v0.6.2
 
 ### Fixes
