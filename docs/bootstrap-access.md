@@ -11,7 +11,8 @@ swap or guest placement.
    bootstrap firewall, enrolls Mercury in Tailscale and provisions a scoped API
    identity. The image/template role is a separate prerequisite for VM creation.
 2. OpenTofu creates the identity, vault and platform VMs in the dedicated pool.
-3. `guests.yml` configures the guest firewall, clock, Tailscale and Docker.
+3. `guests.yml` reconciles guest hostnames and configures the guest firewall,
+   clock, Tailscale and Docker.
 4. The consumer publishes DNS records pointing to the discovered tailnet IPs.
 5. `core.yml` starts Authentik/PostgreSQL and OpenBao, then private Traefik
    endpoints with DNS-01 certificates. Service credentials persist across runs.
@@ -36,6 +37,13 @@ Inventory groups are `proxmox`, `platform_vms`, `authentik`, `openbao`,
 `traefik`, `observability` and `komodo`. The same guest can belong to several
 service groups. Every guest has an explicit `ansible_host`, `ansible_user` and
 `ansible_ssh_private_key_file`.
+
+For members of `platform_vms`, `platform_baseline` sets the persistent and
+current operating-system hostname to `inventory_hostname` through systemd.
+This also converges existing guests when the consumer renames inventory keys;
+it does not depend on cloud-init running again. Physical Proxmox hostnames
+are left unchanged. Naming conventions belong to the consumer inventory;
+MilkyWay does not prescribe planet or moon names.
 
 | Input | Purpose |
 | --- | --- |
