@@ -236,7 +236,7 @@ def test_first_install_then_repeat_does_not_restart(reconcile):
     assert len(reconcile.calls("pvenode")) == 1
     assert reconcile.calls("pvenode")[0][-4:] == ["--force", "1", "--restart", "1"]
     arguments = reconcile.calls("lego")[0]
-    assert arguments[0] == "run"
+    assert arguments[:5] == ["--log.level", "error", "--log.format", "text", "run"]
     assert "--dns.resolvers" in arguments
     assert "--renew-force" not in arguments
     assert str(reconcile.token) not in arguments
@@ -320,11 +320,24 @@ def test_missing_opaque_credential_fails_before_issuance(reconcile):
     ("diagnostic", "label"),
     [
         ("HTTP 403 Forbidden", "dns-provider-auth"),
-        ("time limit exceeded: propagation: NXDOMAIN", "dns-propagation"),
+        ("time limit exceeded: propagation: NXDOMAIN", "propagation-timeout"),
         ("initial recursive nameserver: REFUSED", "dns-propagation"),
         ("dial tcp: i/o timeout", "network"),
         ("urn:ietf:params:acme:error:rateLimited HTTP 429", "acme-rate-limit"),
         ("urn:ietf:params:acme:error:rejectedIdentifier", "acme-rejected"),
+        ("urn:ietf:params:acme:error:unauthorized HTTP 403", "acme-unauthorized"),
+        ("urn:ietf:params:acme:error:invalidContact", "acme-invalid-contact"),
+        ("urn:ietf:params:acme:error:unsupportedContact", "acme-invalid-contact"),
+        ("urn:ietf:params:acme:error:caa", "acme-caa"),
+        ("invalid authorization: urn:ietf:params:acme:error:caa", "acme-caa"),
+        ("invalid authorization: urn:ietf:params:acme:error:dns NXDOMAIN", "acme-dns"),
+        ("unexpected provider failure correlation_id=401403429", "unknown"),
+        ("urn:ietf:params:acme:error:dns NXDOMAIN", "acme-dns"),
+        ("hostinger: could not find zone for domain", "zone-discovery"),
+        ("could not find the start of authority", "zone-discovery"),
+        ("hostinger: update DNS records (add): HTTP 500", "dns-provider-update"),
+        ("hostinger: update DNS records (add): HTTP 403", "dns-provider-auth"),
+        ("initial recursive nameserver: dial tcp: i/o timeout", "network"),
         ("unexpected provider failure", "unknown"),
     ],
 )
@@ -343,4 +356,38 @@ def test_failure_classification_never_exposes_provider_output(
     assert result.stdout == ""
     assert synthetic_private_marker not in result.stderr
     assert diagnostic not in result.stderr
+    assert reconcile.calls("pvenode") == []
+
+
+@pytest.mark.parametrize(
+    ("terminal_error", "expected_label"),
+    [
+        ("urn:ietf:params:acme:error:invalidContact", "acme-invalid-contact"),
+        (
+            "invalid authorization: urn:ietf:params:acme:error:unauthorized",
+            "acme-unauthorized",
+        ),
+        ("hostinger: update DNS records (add): HTTP 500", "dns-provider-update"),
+        ("hostinger: could not find zone for domain", "zone-discovery"),
+        ("unexpected final error", "unknown"),
+    ],
+)
+def test_routine_propagation_info_cannot_mask_terminal_failure(
+    reconcile, terminal_error, expected_label
+):
+    transcript = (
+        "time=fixture level=INFO msg='dns01: waiting for record propagation'\n"
+        "time=fixture level=INFO msg='dns01: cleaning DNS-01 challenge'\n"
+        f"time=fixture level=ERROR msg=Error error='{terminal_error}'\n"
+    )
+    result = reconcile.run(
+        TLS_FIXTURE_ISSUE_FAILURE="1", TLS_FIXTURE_FAILURE_OUTPUT=transcript
+    )
+    assert result.returncode != 0
+    assert result.stderr == (
+        f"ACME failure [{expected_label}]; the installed certificate was preserved.\n"
+    )
+    assert result.stdout == ""
+    assert "level=INFO" not in result.stderr
+    assert terminal_error not in result.stderr
     assert reconcile.calls("pvenode") == []
