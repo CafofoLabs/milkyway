@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.6.0
+
+### Features
+- **platform:** enable trusted native Proxmox TLS and first boot ([#30](https://github.com/CafofoLabs/milkyway/pull/30))
 ## v0.5.0
 
 ### Features
