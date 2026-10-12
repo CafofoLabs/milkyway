@@ -4,7 +4,7 @@
     that:
       - platform_access_mode == 'bootstrap'
       - platform_bao_addr is match('^https://')
-      - platform_bao_token_file | length > 0
+      - platform_bootstrap_bao_token_file | length > 0
       - platform_bootstrap_secrets | length > 0
 
 - name: Validate declared external credential destinations
@@ -25,7 +25,7 @@
   ansible.builtin.uri:
     url: "{{ platform_bao_addr }}/v1/secret/data/{{ item.path }}"
     headers:
-      X-Vault-Token: "{{ lookup('ansible.builtin.file', platform_bao_token_file) | trim }}"
+      X-Vault-Token: "{{ lookup('ansible.builtin.file', platform_bootstrap_bao_token_file) | trim }}"
     return_content: true
     status_code: [200, 404]
     validate_certs: true
@@ -40,7 +40,7 @@
     url: "{{ platform_bao_addr }}/v1/secret/data/{{ item.item.path }}"
     method: POST
     headers:
-      X-Vault-Token: "{{ lookup('ansible.builtin.file', platform_bao_token_file) | trim }}"
+      X-Vault-Token: "{{ lookup('ansible.builtin.file', platform_bootstrap_bao_token_file) | trim }}"
     body_format: json
     body:
       data: >-
