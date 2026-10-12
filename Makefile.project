@@ -21,3 +21,9 @@ host-updates-plan: ## Refresh through Proxmox and simulate the full upgrade
 	$(RUN) python scripts/proxmox_updates.py updates-plan --inventory "$(INVENTORY)"
 host-updates: ## Apply bootstrap updates using Proxmox pveupgrade and verify completion
 	$(RUN) python scripts/proxmox_updates.py updates-apply --inventory "$(INVENTORY)"
+
+.PHONY: host-lid-plan host-lid
+host-lid-plan: ## Preview laptop lid behavior on an empty standalone Proxmox node
+	$(RUN) python scripts/proxmox_lid.py plan --inventory "$(INVENTORY)"
+host-lid: ## Persist ignore-on-close lid behavior; activate with a separate reboot
+	$(RUN) python scripts/proxmox_lid.py apply --inventory "$(INVENTORY)"
