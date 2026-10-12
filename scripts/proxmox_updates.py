@@ -54,17 +54,30 @@ def repository_plan(data, ceph):
                 continue
             for uri in repo["URIs"]:
                 parsed = urlsplit(uri)
+                tailscale = (
+                    parsed.scheme == "https"
+                    and parsed.hostname == "pkgs.tailscale.com"
+                    and parsed.path == "/stable/debian"
+                    and not parsed.query
+                    and not parsed.fragment
+                    and not parsed.port
+                    and repo["Suites"] == ["trixie"]
+                    and repo.get("Components") == ["main"]
+                )
                 if (
                     parsed.username
                     or parsed.password
                     or parsed.scheme not in {"http", "https"}
-                    or parsed.hostname
-                    not in {
-                        "enterprise.proxmox.com",
-                        "download.proxmox.com",
-                        "deb.debian.org",
-                        "security.debian.org",
-                    }
+                    or (
+                        not tailscale
+                        and parsed.hostname
+                        not in {
+                            "enterprise.proxmox.com",
+                            "download.proxmox.com",
+                            "deb.debian.org",
+                            "security.debian.org",
+                        }
+                    )
                 ):
                     raise ValueError("Unexpected active repository; review separately")
                 if "/ceph-" in parsed.path and not parsed.path.endswith(
