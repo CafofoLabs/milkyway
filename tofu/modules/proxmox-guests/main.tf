@@ -7,7 +7,8 @@ resource "proxmox_virtual_environment_vm" "this" {
 
   name                = each.key
   description         = "MilkyWay infrastructure: ${each.value.role}"
-  node_name           = var.node_name
+  node_name           = coalesce(each.value.node, var.node_name)
+  migrate             = true
   vm_id               = each.value.vm_id
   pool_id             = var.pool_id
   tags                = sort(["milkyway", each.value.role])

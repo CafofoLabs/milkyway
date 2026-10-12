@@ -19,7 +19,7 @@ The consumer owns template preparation, credentials, provider/backend configurat
 | `template_id` | Existing prepared template, pinned by its VM ID. |
 | `operator` | Non-root `name` and local `public_key_file` path. Only Ed25519 public keys are accepted. |
 | `network` | IPv4 `prefix_length`, `gateway`, `nameservers`, optional `search_domain`. |
-| `hosts` | Map keyed by hostname: `vm_id`, `role`, `address`, `memory_mb`, `vcpus`, `disk_gb`, optional `cpu_type` and `startup_order`. |
+| `hosts` | Map keyed by hostname: `vm_id`, `role`, `address`, `memory_mb`, `vcpus`, `disk_gb`, optional `node`, `cpu_type` and `startup_order`. |
 
 Roles are `identity`, `vault` and `platform`. Guest IDs and IPv4 addresses must be unique; addresses must belong to the gateway subnet and exclude its network, broadcast and gateway addresses. Reserve them outside the DHCP pool. The default CPU is `x86-64-v2-AES`. The optional `startup_order` records consumer intent; the consumer passes it to the [guest startup role](proxmox-guest-startup.md). Proxmox requires global `Sys.Modify` to set startup order, so Ansible owns this field through trusted root SSH and the scoped API module ignores it. CPU compatibility across future nodes must be checked before migration.
 
@@ -38,6 +38,10 @@ Run the consumer's Makefile plan/apply targets from Nimbus. Do not execute this 
 `hosts` exports each guest's VM ID, Proxmox node, bootstrap LAN address, operator, logical role and sizing. Ansible inventory generation consumes that map. No credentials or public-key contents are outputs. Tailnet names and addresses are discovered after enrollment. `template_id` identifies the selected creation template.
 
 ## Changes, destruction and recovery
+
+A guest's optional `node` overrides the default `node_name`. The resource enables the pinned provider's `migrate` setting, so an approved node change requests an in-place migration instead of replacement. Resource keys, VM IDs, disks, addresses and guest identities must be preserved. This is migration capability, not readiness proof or permission to move a running service. The consumer must verify cluster membership/quorum, network, CPU, storage, scoped API permissions and independent recovery access before apply. Prefer a scheduled offline migration for the first move; `reboot_after_update = false` remains in effect.
+
+Existing guests do not require a destination template just to migrate. Creating a new guest still requires its configured template to be accessible at the target node. Cross-node cloning and provisioning templates across a cluster are separate operations; do not change an existing guest's clone/template settings merely to relocate it. The consumer must partition Ansible startup entries by actual guest node; a host with no selected guests is skipped.
 
 Both OpenTofu `prevent_destroy` and Proxmox VM protection are enabled. Replacement and deletion fail instead of silently destroying service data. There are no libvirt-style replacement triggers tied to cloud-init contents. Automatic provider reboots on updates are disabled; an update that requires shutdown fails and must be scheduled explicitly. Disk shrink is unsupported.
 
