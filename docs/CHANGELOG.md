@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.6.1
+
+### Fixes
+- **bootstrap:** correct ACME resolvers and vault seed identity ([#32](https://github.com/CafofoLabs/milkyway/pull/32))
 ## v0.6.0
 
 ### Features
