@@ -1,6 +1,6 @@
 # First-stage execution plan
 
-Status: repository foundation implemented with Nebula v0.1.3. Repository checks and documentation builds are available; hosted Read the Docs publication awaits account linking. Read-only installation preflight is implemented and tested offline. Mercury baseline and its operational validation remain gated by the installation handoff. No services have been deployed.
+Status: this is the original delivery plan, retained as design history. Repository automation, Proxmox onboarding, private access and basic service modules are implemented and have been exercised by a consumer. For current behavior, use [bootstrap access](bootstrap-access.md), [services](services.md), [telemetry access](observability.md) and [application contracts](application-contracts.md). Hosted Read the Docs publication remains separate from local/CI documentation builds.
 
 ## Objective
 
@@ -17,7 +17,7 @@ Establish a reproducible repository foundation, adopt it in MilkyWay and Nimbus,
 | 5 | Proxmox baseline module | MilkyWay | Read-only preflight, reviewable plan, controlled apply, post-check, and a second run without configuration drift. |
 | 6 | First environment integration | TheAldersonProject/nimbus | Inventory selects Mercury and invokes the pinned MilkyWay baseline; the host is usable after an agreed reboot and retains recovery access. |
 
-Deliver each slice in a small Conventional Commit PR. Nebula's name and public visibility are approved. Nimbus starts with documentation only; it must not pretend to have been generated from a template that does not exist yet.
+Deliver each slice in a small Conventional Commit PR. Nebula's name and public visibility are approved. The original sequence started with consumer documentation; both consumers now adopt the released Nebula template.
 
 ## 1. Repository foundation
 
@@ -85,7 +85,7 @@ Do not share passwords or tokens. The automatic baseline starts only after this 
 
 ## Later stages
 
-After the baseline, plan the portable VM/container layout and deploy Authentik, OpenBao, private DNS/TLS ingress, Komodo, and observability in dependency order. Cluster expansion, backup policy, application provisioning, and the public SDK remain separate increments. No service rollout is included in the repository-foundation milestone.
+Basic service modules now cover Authentik, OpenBao, private DNS/TLS ingress, Komodo and observability. Cluster expansion, backup/recovery automation, complete application provisioning and the public SDK remain separate increments. The initial repository-foundation milestone alone never implied a service rollout.
 
 ## Human decisions and actions
 

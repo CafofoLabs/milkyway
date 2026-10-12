@@ -1,6 +1,6 @@
 # Proxmox installation preflight
 
-Status: read-only collector implemented. Baseline apply, firewall changes, Tailscale enrollment, and verification on physical hardware remain pending the installation handoff. Passing preflight is not proof of a secure or operational baseline.
+Status: read-only installation collector implemented and exercised on physical hardware. It is an onboarding gate for an empty standalone node, not an operational health check for a host already running guests. Baseline configuration is a separate module; see [bootstrap access](bootstrap-access.md).
 
 ## Purpose and boundary
 
@@ -30,7 +30,7 @@ Exit status 1 means a probe failed, identity/version differed, cluster membershi
 
 ## Verification and recovery
 
-`make check` includes offline tests for rejected SSH input, identity/version/workload guards, safe failure output, and private repeatable report writes. The collector has not been validated against the user's physical host yet.
+`make check` includes offline tests for rejected SSH input, identity/version/workload guards, safe failure output, and private repeatable report writes. Physical-host onboarding has also been exercised by a consumer; environment-specific evidence belongs in that consumer repository.
 
 On connection failure, verify the management network, trusted host fingerprint, SSH key access, and root authorization. Do not disable host-key verification to make the check pass. A report failure requires no host rollback: nothing was changed remotely. Inspect the local report and establish the installation handoff before implementing or running baseline apply.
 
