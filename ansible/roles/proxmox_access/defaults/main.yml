@@ -4,6 +4,7 @@ proxmox_api_user: milkyway@pve
 proxmox_api_token_name: provisioning
 proxmox_pool: milkyway
 proxmox_storage_ids: [local, local-lvm]
+proxmox_bridges: [vmbr0]
 proxmox_api_token_file: ""
 proxmox_tls_ca_file: ""
 proxmox_firewall_cutover: false

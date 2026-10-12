@@ -41,9 +41,11 @@
     proxmox_managed_roles:
       - name: MilkyWayVM
         path: "/pool/{{ proxmox_pool }}"
-        privileges: 'Pool.Allocate VM.Allocate VM.Audit VM.Clone VM.Config.CDROM VM.Config.CPU VM.Config.Cloudinit VM.Config.Disk VM.Config.HWType VM.Config.Memory VM.Config.Network VM.Config.Options VM.Console VM.Migrate VM.PowerMgmt'
+        privileges: 'Pool.Audit VM.GuestAgent.Audit Pool.Allocate VM.Allocate VM.Audit VM.Clone VM.Config.CDROM VM.Config.CPU VM.Config.Cloudinit VM.Config.Disk VM.Config.HWType VM.Config.Memory VM.Config.Network VM.Config.Options VM.Console VM.Migrate VM.PowerMgmt'
       - name: MilkyWayStorage
         privileges: 'Datastore.AllocateSpace Datastore.AllocateTemplate Datastore.Audit'
+      - name: MilkyWayNetwork
+        privileges: 'SDN.Use'
 
 - name: Create missing provisioning roles
   ansible.builtin.command:
@@ -101,6 +103,17 @@
     | selectattr('ugid', 'equalto', proxmox_api_user)
     | selectattr('path', 'equalto', '/storage/' ~ item)
     | selectattr('roleid', 'equalto', 'MilkyWayStorage') | list | length == 0
+  changed_when: true
+
+- name: Grant use of declared bridges only
+  ansible.builtin.command:
+    argv: [pvesh, set, /access/acl, --path, "/sdn/zones/localnetwork/{{ item }}", --users, "{{ proxmox_api_user }}", --roles, MilkyWayNetwork, --propagate, '1']
+  loop: "{{ proxmox_bridges }}"
+  when: >-
+    proxmox_existing_acls.stdout | from_json
+    | selectattr('ugid', 'equalto', proxmox_api_user)
+    | selectattr('path', 'equalto', '/sdn/zones/localnetwork/' ~ item)
+    | selectattr('roleid', 'equalto', 'MilkyWayNetwork') | list | length == 0
   changed_when: true
 
 - name: Inspect existing API tokens without reading their values
