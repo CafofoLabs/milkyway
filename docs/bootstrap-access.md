@@ -146,6 +146,16 @@ multiplexing and requires strict host-key checking. A new tailnet address is
 associated with the public host key obtained through the already trusted
 bootstrap transport, without trusting an unauthenticated network scan.
 
+Cutover is one-way during ordinary reapplication. Each firewall role reads its
+existing managed policy before rendering: an already absent bootstrap LAN rule,
+an explicit cutover request or operational mode selects tailnet-only rules.
+This applies independently to each guest and Proxmox host, including bootstrap
+retries after a partial deployment. Fresh tailnet SSH must succeed before any
+such policy write; failure leaves the existing policy untouched. The policy
+itself records the restriction, not a consumer-wide readiness flag. A first
+bootstrap retains its narrow temporary LAN allowance until explicit cutover.
+Reopening management requires a separately planned recovery procedure.
+
 A restrictive firewall does not repair an overly broad shared tailnet ACL.
 The consumer must verify that approved operators can reach management ports
 and unauthorized tailnet identities cannot. Preserve Jarvis rules when making

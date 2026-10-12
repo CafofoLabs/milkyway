@@ -12,7 +12,7 @@ table inet milkyway {
         iifname "tailscale0" accept
         iifname "docker0" accept
         iifname "br-*" accept
-{% if not host_firewall_cutover %}
+{% if not host_firewall_effective_cutover %}
         ip saddr {{ platform_initial_management_cidr | milkyway_ipv4_cidr }} tcp dport 22 accept
 {% endif %}
         udp sport 67 udp dport 68 accept

@@ -199,11 +199,12 @@ def ansible_checks(directory: Path, environment: dict[str, str]) -> None:
             "ansible/roles/proxmox_tls/tests/test_tls.py",
             "ansible/roles/proxmox_guest_startup/tests/test_startup.py",
             "ansible/roles/platform_credentials/tests/test_bootstrap_seed.py",
+            "ansible/roles/host_firewall/tests/test_cutover.py",
         ],
         cwd=ROOT,
         environment=environment,
     )
-    print("OpenBao and Proxmox TLS: isolated runtime guard tests passed", flush=True)
+    print("Isolated infrastructure runtime guard tests passed", flush=True)
 
 
 def main() -> int:
