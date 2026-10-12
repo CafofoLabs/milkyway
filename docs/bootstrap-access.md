@@ -11,8 +11,9 @@ swap or guest placement.
    bootstrap firewall, enrolls Mercury in Tailscale and provisions a scoped API
    identity. The image/template role is a separate prerequisite for VM creation.
 2. OpenTofu creates the identity, vault and platform VMs in the dedicated pool.
-3. `guests.yml` reconciles guest hostnames and configures the guest firewall,
-   clock, Tailscale and Docker.
+3. `guests.yml` waits for cloud-init to finish its first boot, hands subsequent
+   guest configuration to Ansible, reconciles hostnames and configures the guest
+   firewall, clock, Tailscale and Docker.
 4. The consumer publishes DNS records pointing to the discovered tailnet IPs.
 5. `core.yml` starts Authentik/PostgreSQL and OpenBao, then private Traefik
    endpoints with DNS-01 certificates. Service credentials persist across runs.
@@ -65,6 +66,40 @@ MilkyWay does not prescribe planet or moon names.
 The consumer creates protected local directories before execution. Bootstrap
 `.env` loading belongs to the consumer; Ansible receives file paths. Bootstrap
 secrets must not appear in CLI arguments, logs, reports or committed files.
+
+The baseline and Docker roles manage their official signed APT source files
+directly. Existing `signed-by` keyrings remain mandatory; package installation
+refreshes APT metadata and validates repository signatures. This supports minimal
+Debian images without adding the obsolete `apt-key` command or an otherwise
+unneeded `gpg` dependency solely for the repository module.
+
+## Cloud-init handoff
+
+Cloud-init configures a fresh VM's initial account, SSH host keys and network.
+Before changing members of `platform_vms`, `platform_baseline` waits for
+`/var/lib/cloud/instance/boot-finished`, then manages the empty root-owned file
+`/etc/cloud/cloud-init.disabled`. This is the
+[documented cloud-init disable mechanism](https://docs.cloud-init.io/en/latest/howto/disable_cloud_init.html).
+It prevents subsequent boots from regenerating host keys or restoring cached
+hostnames and `/etc/hosts` entries after Proxmox initialization metadata changes.
+The role does not stop running cloud-init stages, clean its cache, remove host
+keys or alter the existing persistent network configuration. The completion
+marker confirms the final stage ended; it does not prove every first-boot module
+succeeded. Any bootstrap errors must be diagnosed and repaired before handoff.
+
+OpenTofu continues to provision fresh VMs and manage their virtual hardware.
+After handoff, its cloud-init initialization account, keys and IP settings are
+bootstrap inputs; changing them does not reconfigure an existing guest.
+Ansible owns subsequent guest configuration. An existing guest IP change needs
+an explicitly planned network migration; it must not rely on rerunning
+cloud-init. Removing the disable marker requires a separate recovery decision:
+changed instance metadata could rerun per-instance modules and rotate host keys.
+
+The immutable Debian template stays unbooted and has no disable marker, so each
+new clone runs cloud-init and generates its own host identity before handoff.
+Do not use an initialized guest as a new template without a separate image
+preparation procedure that removes the marker and cleans instance-specific state.
+Physical Proxmox hosts are outside this handoff.
 
 ## Credential lifetime
 

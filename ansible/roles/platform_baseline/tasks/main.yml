@@ -6,6 +6,23 @@
       - platform_access_mode in ['bootstrap', 'operational']
     fail_msg: This baseline supports Debian and Proxmox Debian hosts only.
 
+- name: Hand guest runtime configuration over from cloud-init to Ansible
+  when: inventory_hostname in groups.get('platform_vms', [])
+  block:
+    - name: Wait for the initial cloud-init final stage to finish
+      ansible.builtin.wait_for:
+        path: /var/lib/cloud/instance/boot-finished
+        state: present
+        timeout: 300
+
+    - name: Prevent cloud-init from changing configured guests on subsequent boots
+      ansible.builtin.copy:
+        content: ''
+        dest: /etc/cloud/cloud-init.disabled
+        owner: root
+        group: root
+        mode: '0644'
+
 - name: Reconcile the guest hostname from consumer inventory
   ansible.builtin.hostname:
     name: "{{ inventory_hostname }}"
