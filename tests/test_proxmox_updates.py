@@ -111,3 +111,34 @@ def test_refresh_does_not_hide_task_id_with_formatter_quiet(monkeypatch):
     monkeypatch.setattr(updates, "api", api)
     updates.refresh("node-a", {})
     assert "--quiet" not in calls[0]
+
+
+def test_official_tailscale_repository_keeps_repeated_bootstrap_supported():
+    data = repositories()
+    data["files"][0]["repositories"][0].update(
+        URIs=["https://pkgs.tailscale.com/stable/debian"],
+        Components=["main"],
+        Suites=["trixie"],
+    )
+    assert updates.repository_plan(data, "ceph-squid-no-subscription")["disable"] == []
+
+
+@pytest.mark.parametrize(
+    "uri,suite,component",
+    [
+        ("http://pkgs.tailscale.com/stable/debian", "trixie", "main"),
+        ("https://pkgs.tailscale.com/unstable/debian", "trixie", "main"),
+        ("https://pkgs.tailscale.com/stable/debian?other=1", "trixie", "main"),
+        ("https://pkgs.tailscale.com/stable/debian", "bookworm", "main"),
+        ("https://pkgs.tailscale.com/stable/debian", "trixie", "other"),
+    ],
+)
+def test_tailscale_allowance_does_not_accept_other_sources(uri, suite, component):
+    data = repositories()
+    data["files"][0]["repositories"][0].update(
+        URIs=[uri],
+        Components=[component],
+        Suites=[suite],
+    )
+    with pytest.raises(ValueError):
+        updates.repository_plan(data, "ceph-squid-no-subscription")

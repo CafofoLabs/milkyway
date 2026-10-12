@@ -26,3 +26,5 @@ References: [Proxmox repositories](https://github.com/proxmox/pve-docs/blob/mast
 The native CLI streams task progress before its final JSON task identifier. The adapter consumes only that final identifier and verifies the native task status. It does not pass the CLI formatter’s `--quiet` option, which suppresses the identifier. Progress output is captured and never forwarded to the caller.
 
 The upgrade window is four hours, with a small additional SSH collection margin. SSH keepalives detect broken connections during slow downloads. On a slow link, the former one-hour window could expire during package installation; a download-only interruption preserves the APT cache and must happen before dpkg starts. Do not interrupt an active package installation to change this window.
+
+The official stable Tailscale Debian repository is accepted only at `https://pkgs.tailscale.com/stable/debian`, with suite `trixie` and component `main`, so an empty standalone node can repeat bootstrap after private-network enrollment. Other third-party repositories remain blocked.
