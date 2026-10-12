@@ -7,7 +7,7 @@
 
 A framework for provisioning and configuring a professional self-hosted homelab, built around Proxmox, Tailscale, Authentik, OpenBao, Komodo, and observability.
 
-**Status:** repository foundation is available. [Read-only host preflight](docs/proxmox-preflight.md) is available. Baseline changes and service deployment follow after the installation handoff.
+**Status:** repository safeguards, Proxmox baseline, private Tailscale access, DNS/TLS, and basic service modules are implemented. Consumers deploy through their own inventory and OpenTofu state. Backup/recovery automation and fine-grained telemetry network policy remain separate work.
 
 Run `make setup` to install development tools and hooks, then `make check`. See [development](docs/development.md) and [releases](docs/releases.md).
 

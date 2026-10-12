@@ -1,6 +1,6 @@
 # Foundation plan
 
-Status: repository automation implemented through Nebula v0.1.3. This document retains the design requirements; host automation and hosted documentation publication are not yet complete.
+Status: the repository foundation, host baseline and basic service modules are implemented. This document retains the original design requirements; use the module guides for current commands. Hosted documentation still requires the separate [Read the Docs setup](documentation-hosting.md).
 
 ## Ownership
 
@@ -111,7 +111,7 @@ Then adopt the first tagged template release in MilkyWay. Implement the first in
 - Nebula is the public, language-independent project template under CafofoLabs.
 - MilkyWay and its documentation are public. Use Read the Docs Community; its account/repository integration still needs to be established.
 - Nimbus is the homelab consumer under TheAldersonProject. It starts private; do not publish its inventory or documentation through the public framework documentation.
-- MilkyWay main protection is configured: PR required, administrator enforcement, no force pushes or deletion, linear history, resolved conversations, and squash-only merging. The Nebula CI job is implemented and becomes required after a successful remote run.
+- MilkyWay main protection is configured: PR required, administrator enforcement, no force pushes or deletion, linear history, resolved conversations, and squash-only merging. The Nebula CI job is required for merges; recheck effective settings with `make repo-plan` when changing repository policy.
 - Nimbus private-repository protection is verified independently against the personal account's capabilities. Never change visibility or purchase a plan implicitly.
 - See the [first-stage execution plan](execution-plan.md) for sequencing and acceptance gates.
 
