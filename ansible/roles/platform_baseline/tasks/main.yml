@@ -6,6 +6,12 @@
       - platform_access_mode in ['bootstrap', 'operational']
     fail_msg: This baseline supports Debian and Proxmox Debian hosts only.
 
+- name: Reconcile the guest hostname from consumer inventory
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+    use: systemd
+  when: inventory_hostname in groups.get('platform_vms', [])
+
 - name: Install the minimal host baseline
   ansible.builtin.apt:
     name: [ca-certificates, curl, openssh-server, python3, chrony]
