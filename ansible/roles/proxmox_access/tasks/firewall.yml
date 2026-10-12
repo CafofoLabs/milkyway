@@ -9,19 +9,6 @@
     that: not proxmox_cluster_configuration.stat.exists
     fail_msg: Cluster firewall management requires a separately approved policy.
 
-- name: Require an explicit bootstrap management source
-  ansible.builtin.assert:
-    that:
-      - platform_initial_management_cidr | length > 0
-      - platform_initial_management_cidr | milkyway_ipv4_cidr != '0.0.0.0/0'
-  when: not proxmox_firewall_cutover
-
-- name: Verify new tailnet access before cutting Proxmox LAN access
-  ansible.builtin.include_role:
-    name: ssh_access
-    tasks_from: verify
-  when: proxmox_firewall_cutover
-
 - name: Inspect existing cluster and node policy
   ansible.builtin.stat:
     path: "{{ item }}"
@@ -39,6 +26,34 @@
   when: item.stat.exists
   changed_when: false
   failed_when: "'Managed by MilkyWay' not in proxmox_firewall_ownership.stdout"
+
+- name: Read existing managed native node policy
+  ansible.builtin.slurp:
+    src: "/etc/pve/nodes/{{ proxmox_node }}/host.fw"
+  register: proxmox_firewall_existing_rules
+  when: proxmox_firewall_before.results[1].stat.exists
+
+- name: Preserve tailnet-only native policy across all subsequent runs
+  ansible.builtin.set_fact:
+    proxmox_firewall_effective_cutover: >-
+      {{ proxmox_firewall_cutover | bool or
+         platform_access_mode | default('bootstrap') == 'operational' or
+         (proxmox_firewall_before.results[1].stat.exists and
+          (proxmox_firewall_existing_rules.content | default('') | b64decode |
+           regex_search('(?m)^[ \t]*IN ACCEPT -source [0-9./]+ -p tcp -dport 22,8006[ \t]*$')) is none) }}
+
+- name: Require an explicit bootstrap management source
+  ansible.builtin.assert:
+    that:
+      - platform_initial_management_cidr | length > 0
+      - platform_initial_management_cidr | milkyway_ipv4_cidr != '0.0.0.0/0'
+  when: not proxmox_firewall_effective_cutover
+
+- name: Verify new tailnet access before cutting Proxmox LAN access
+  ansible.builtin.include_role:
+    name: ssh_access
+    tasks_from: verify
+  when: proxmox_firewall_effective_cutover
 
 - name: Write cluster candidate
   ansible.builtin.copy:
@@ -126,14 +141,14 @@
       ansible.builtin.include_role:
         name: ssh_access
         tasks_from: verify
-      when: proxmox_firewall_cutover
+      when: proxmox_firewall_effective_cutover
     - name: Confirm fresh bootstrap access after applying policy
       ansible.builtin.command:
         argv: [ssh, -T, -i, "{{ platform_ssh_identity_file }}", -o, IdentitiesOnly=yes, -o, BatchMode=yes, -o, StrictHostKeyChecking=yes, -o, ControlMaster=no, -o, ControlPath=none, -o, ConnectTimeout=10, "{{ ansible_user | default('root') }}@{{ ansible_host }}", 'true']
       delegate_to: localhost
       become: false
       changed_when: false
-      when: not proxmox_firewall_cutover
+      when: not proxmox_firewall_effective_cutover
     - name: Cancel rollback after verified fresh access
       ansible.builtin.systemd_service:
         name: milkyway-pve-rollback.timer

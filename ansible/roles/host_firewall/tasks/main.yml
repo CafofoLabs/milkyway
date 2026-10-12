@@ -1,16 +1,37 @@
 ---
+- name: Check whether managed guest rules exist
+  ansible.builtin.stat:
+    path: /etc/nftables.d/milkyway.nft
+    checksum_algorithm: sha256
+  register: host_firewall_existing
+
+- name: Read existing managed guest policy
+  ansible.builtin.slurp:
+    src: /etc/nftables.d/milkyway.nft
+  register: host_firewall_existing_rules
+  when: host_firewall_existing.stat.exists
+
+- name: Preserve tailnet-only guest policy across all subsequent runs
+  ansible.builtin.set_fact:
+    host_firewall_effective_cutover: >-
+      {{ host_firewall_cutover | bool or
+         platform_access_mode | default('bootstrap') == 'operational' or
+         (host_firewall_existing.stat.exists and
+          (host_firewall_existing_rules.content | default('') | b64decode |
+           regex_search('(?m)^[ \t]*ip saddr [0-9./]+ tcp dport 22 accept[ \t]*$')) is none) }}
+
 - name: Require an explicit narrow bootstrap source
   ansible.builtin.assert:
     that:
       - platform_initial_management_cidr | length > 0
       - platform_initial_management_cidr | milkyway_ipv4_cidr != '0.0.0.0/0'
-  when: not host_firewall_cutover
+  when: not host_firewall_effective_cutover
 
 - name: Verify fresh tailnet access before removing LAN management
   ansible.builtin.include_role:
     name: ssh_access
     tasks_from: verify
-  when: host_firewall_cutover
+  when: host_firewall_effective_cutover
 
 - name: Install nftables
   ansible.builtin.apt:
@@ -36,12 +57,6 @@
     mode: "0600"
     validate: /usr/sbin/nft -c -f %s
   changed_when: false
-
-- name: Check whether managed guest rules exist
-  ansible.builtin.stat:
-    path: /etc/nftables.d/milkyway.nft
-    checksum_algorithm: sha256
-  register: host_firewall_existing
 
 - name: Inspect candidate checksum
   ansible.builtin.stat:
@@ -107,7 +122,7 @@
       ansible.builtin.include_role:
         name: ssh_access
         tasks_from: verify
-      when: host_firewall_cutover
+      when: host_firewall_effective_cutover
     - name: Prove a new bootstrap connection survived the policy change
       ansible.builtin.command:
         argv:
@@ -132,7 +147,7 @@
       delegate_to: localhost
       become: false
       changed_when: false
-      when: not host_firewall_cutover
+      when: not host_firewall_effective_cutover
     - name: Cancel rollback only after fresh verified access
       ansible.builtin.systemd_service:
         name: milkyway-firewall-rollback.timer
