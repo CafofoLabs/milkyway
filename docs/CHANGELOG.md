@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.8.0
+
+### Features
+- **identity:** add declarative application service accounts ([#48](https://github.com/CafofoLabs/milkyway/pull/48))
 ## v0.7.1
 
 ### Fixes
