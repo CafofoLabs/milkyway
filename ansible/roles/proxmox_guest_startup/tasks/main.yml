@@ -1,0 +1,79 @@
+---
+- name: Require explicit guest startup scope
+  ansible.builtin.assert:
+    that:
+      - proxmox_node is match('^[a-zA-Z0-9_-]+$')
+      - ansible_hostname == proxmox_node
+      - proxmox_pool is defined and proxmox_pool is match('^[a-zA-Z0-9_-]+$')
+      - proxmox_guest_startup is sequence and proxmox_guest_startup is not string and proxmox_guest_startup is not mapping
+      - proxmox_guest_startup | length > 0
+    fail_msg: Startup ordering requires the declared node, pool and an explicit guest list.
+
+- name: Validate every requested startup setting before any change
+  ansible.builtin.assert:
+    that:
+      - item is mapping
+      - item.vm_id is defined and (item.vm_id | string) is match('^[0-9]+$')
+      - item.vm_id | int >= 100 and item.vm_id | int <= 999999999
+      - item.order is defined and (item.order | string) is match('^[0-9]+$')
+    fail_msg: Each startup entry requires a valid VM ID and a non-negative integer order.
+  loop: "{{ proxmox_guest_startup }}"
+
+- name: Reject duplicate VM IDs
+  ansible.builtin.assert:
+    that:
+      - proxmox_guest_startup | map(attribute='vm_id') | map('int') | unique | list | length == proxmox_guest_startup | length
+
+- name: Inspect guest locations
+  ansible.builtin.command:
+    argv: [pvesh, get, /cluster/resources, --type, vm, --output-format, json]
+  register: proxmox_startup_locations
+  changed_when: false
+  check_mode: false
+
+- name: Inspect the declared pool
+  ansible.builtin.command:
+    argv: [pvesh, get, "/pools/{{ proxmox_pool }}", --output-format, json]
+  register: proxmox_startup_pool
+  changed_when: false
+  check_mode: false
+
+- name: Require every selected guest to belong to the declared pool and node
+  ansible.builtin.assert:
+    that:
+      - locations | selectattr('vmid', 'equalto', item.vm_id | int) | selectattr('node', 'equalto', proxmox_node) | selectattr('type', 'equalto', 'qemu') | list | length == 1
+      - members | selectattr('type', 'equalto', 'qemu') | selectattr('vmid', 'equalto', item.vm_id | int) | list | length == 1
+    fail_msg: Refusing startup changes outside the declared pool or node.
+  vars:
+    locations: "{{ proxmox_startup_locations.stdout | from_json }}"
+    members: "{{ (proxmox_startup_pool.stdout | from_json).members | default([]) }}"
+  loop: "{{ proxmox_guest_startup }}"
+
+- name: Inspect guest configurations without logging their contents
+  ansible.builtin.command:
+    argv: [pvesh, get, "/nodes/{{ proxmox_node }}/qemu/{{ item.vm_id }}/config", --output-format, json]
+  loop: "{{ proxmox_guest_startup }}"
+  register: proxmox_startup_configs
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Refuse templates before changing any startup configuration
+  ansible.builtin.assert:
+    that:
+      - (item.stdout | from_json).template | default(0) | int == 0
+    fail_msg: Startup ordering applies to deployed guests, never templates.
+  loop: "{{ proxmox_startup_configs.results }}"
+  no_log: true
+
+- name: Reconcile only differing guest startup configuration
+  ansible.builtin.command:
+    argv: [qm, set, "{{ item.item.vm_id | string }}", --startup, "{{ desired }}"]
+  vars:
+    desired: "order={{ item.item.order | int }},up=30,down=60"
+  loop: "{{ proxmox_startup_configs.results }}"
+  loop_control:
+    label: "{{ item.item.vm_id }}"
+  when: ((item.stdout | from_json).startup | default('') | split(',') | sort) != (desired | split(',') | sort)
+  changed_when: true
+  no_log: true

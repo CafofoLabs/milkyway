@@ -1,0 +1,19 @@
+---
+proxmox_tls_fqdn: ""
+proxmox_tls_lego_version: "5.5.2"
+proxmox_tls_lego_sha256: "2a35505089e7772c92e1e9ac144df91151ef2eca8568630db0ff91fca06d9bef"
+proxmox_tls_ca_environment: "{{ acme_ca_server | default('production') }}"
+proxmox_tls_ca_servers:
+  production: https://acme-v02.api.letsencrypt.org/directory
+  staging: https://acme-staging-v02.api.letsencrypt.org/directory
+proxmox_tls_config_dir: /etc/milkyway/proxmox-tls
+proxmox_tls_state_root: /var/lib/milkyway/proxmox-tls
+proxmox_tls_state_dir: "{{ proxmox_tls_state_root }}/{{ proxmox_tls_ca_environment }}"
+proxmox_tls_binary_dir: "/opt/milkyway/lego/{{ proxmox_tls_lego_version }}"
+proxmox_tls_script: /usr/local/libexec/milkyway-proxmox-tls
+proxmox_tls_lock_file: /run/lock/milkyway-proxmox-tls.lock
+proxmox_tls_installed_certificate: /etc/pve/local/pveproxy-ssl.pem
+proxmox_tls_ca_path: /etc/ssl/certs
+proxmox_tls_dns_secret_path: platform/hostinger/api
+proxmox_tls_dns_secret_field: token
+proxmox_tls_propagation_timeout: 300

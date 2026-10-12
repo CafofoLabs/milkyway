@@ -13,17 +13,20 @@
     project_src: "{{ openbao_deploy_dir }}"
     state: restarted
 
-# The restart returns as soon as the container is running, but a vault that is
-# up and still sealed serves nothing. Anything downstream — a signing request,
-# an OpenTofu apply — has to wait for this rather than for the container.
-- name: Wait for the vault to unseal itself after a restart
-  ansible.builtin.command:
-    cmd: >-
-      docker compose -f {{ openbao_deploy_dir }}/docker-compose.yml
-      exec -T openbao bao status
+# First boot must reach initialization in the role. An existing vault must
+# finish auto-unsealing before downstream consumers can use it.
+- name: Wait for the vault to become ready after a restart
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/sys/seal-status"
+    method: GET
+    status_code: 200
+    return_content: true
   register: openbao_restart_status
-  until: openbao_restart_status.rc == 0
-  retries: 30
-  delay: 5
+  until: >-
+    openbao_restart_status.json is defined and
+    ((not (openbao_restart_status.json.initialized | bool)) or
+    (not (openbao_restart_status.json.sealed | bool)))
+  retries: "{{ openbao_ready_retries }}"
+  delay: "{{ openbao_ready_delay }}"
   changed_when: false
   listen: Restart openbao

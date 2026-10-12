@@ -54,6 +54,7 @@ def isolated_environment(directory: Path) -> dict[str, str]:
             "TF_INPUT": "0",
             "TF_CLI_CONFIG_FILE": str(config),
             "ANSIBLE_CONFIG": str(ROOT / "ansible" / "ansible.cfg"),
+            "ANSIBLE_FILTER_PLUGINS": str(ROOT / "ansible/filter_plugins"),
             "ANSIBLE_LOCAL_TEMP": str(directory / "ansible-local"),
             "ANSIBLE_REMOTE_TEMP": str(directory / "ansible-remote"),
             "ANSIBLE_PYTHON_INTERPRETER": sys.executable,
@@ -194,11 +195,14 @@ def ansible_checks(directory: Path, environment: dict[str, str]) -> None:
             "pytest",
             "-q",
             "ansible/roles/openbao/tests/test_seal_guard.py",
+            "ansible/roles/openbao/tests/test_restart_readiness.py",
+            "ansible/roles/proxmox_tls/tests/test_tls.py",
+            "ansible/roles/proxmox_guest_startup/tests/test_startup.py",
         ],
         cwd=ROOT,
         environment=environment,
     )
-    print("OpenBao: all four real Ansible seal-guard fixtures passed", flush=True)
+    print("OpenBao and Proxmox TLS: isolated runtime guard tests passed", flush=True)
 
 
 def main() -> int:

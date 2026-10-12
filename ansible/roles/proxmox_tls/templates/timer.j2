@@ -1,0 +1,11 @@
+[Unit]
+Description=MilkyWay automatic native Proxmox certificate renewal
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+Unit=milkyway-proxmox-tls.service
+
+[Install]
+WantedBy=timers.target
