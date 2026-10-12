@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.7.1
+
+### Fixes
+- **proxmox:** allow repeat updates after Tailscale enrollment ([#46](https://github.com/CafofoLabs/milkyway/pull/46))
 ## v0.7.0
 
 ### Features
