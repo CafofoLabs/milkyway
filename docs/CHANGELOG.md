@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.7.0
+
+### Features
+- **proxmox:** prepare protected per-VM placement ([#44](https://github.com/CafofoLabs/milkyway/pull/44))
 ## v0.6.6
 
 ### Documentation
