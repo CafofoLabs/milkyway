@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.6.2
+
+### Fixes
+- **tls:** classify terminal ACME errors without exposing diagnostics ([#34](https://github.com/CafofoLabs/milkyway/pull/34))
 ## v0.6.1
 
 ### Fixes
