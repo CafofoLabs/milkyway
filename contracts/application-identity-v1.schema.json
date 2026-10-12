@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:milkyway:application-identity:v1",
+  "title": "MilkyWay application identity contract v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "application",
+    "environment",
+    "serviceAccounts"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "application": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,47}$"
+    },
+    "environment": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,47}$"
+    },
+    "serviceAccounts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "roles"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^svc-[a-z0-9-]+$",
+            "maxLength": 160
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "credentialRevision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647,
+            "default": 1
+          },
+          "roles": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,47}$"
+            }
+          },
+          "secrets": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "read"
+            ],
+            "properties": {
+              "read": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "mount",
+                    "path"
+                  ],
+                  "properties": {
+                    "mount": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9-]{0,47}$"
+                    },
+                    "path": {
+                      "type": "string",
+                      "pattern": "^[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)*$"
+                    },
+                    "recursive": {
+                      "type": "boolean",
+                      "default": false
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

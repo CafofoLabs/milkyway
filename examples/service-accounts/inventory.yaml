@@ -1,0 +1,15 @@
+version: 1
+application: inventory
+environment: dev
+serviceAccounts:
+  - name: svc-inventory-dev
+    enabled: true
+    credentialRevision: 1
+    roles: [application-service]
+    secrets:
+      read:
+        - mount: secret
+          path: apps/inventory/dev
+          recursive: true
+        - mount: secret
+          path: shared/mail

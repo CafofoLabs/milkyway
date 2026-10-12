@@ -1,0 +1,27 @@
+version: 1
+deployment: example
+identity:
+  url: https://idp.example.test
+  slug: example-services
+  signingKey: authentik Self-signed Certificate
+  authorizationFlow: default-provider-authorization-implicit-consent
+  invalidationFlow: default-provider-invalidation-flow
+  jwtTtl: 300
+openbao:
+  url: https://bao.example.test
+  authMount: service-jwt
+  tokenTtl: 300
+  tokenMaxTtl: 900
+roles:
+  application-service:
+    policies: []
+applications:
+  inventory:
+    dev:
+      roles: [application-service]
+      secrets:
+        - mount: secret
+          path: apps/inventory/dev
+          recursive: true
+        - mount: secret
+          path: shared/mail
