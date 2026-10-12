@@ -1,0 +1,12 @@
+[project]
+name = "milkyway-infrastructure-checks"
+version = "0.1.0"
+requires-python = ">=3.12,<3.15"
+dependencies = [
+  "ansible-core==2.21.4",
+  "PyYAML==6.0.3",
+  "pytest==9.1.1",
+]
+
+[tool.uv]
+package = false

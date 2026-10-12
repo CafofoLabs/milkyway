@@ -1,0 +1,42 @@
+---
+- name: Verify the private transport before changing SSH
+  ansible.builtin.import_tasks: verify.yml
+
+- name: Install supplied SSH certificate authority public key
+  ansible.builtin.copy:
+    content: "{{ platform_ssh_ca_public_key | trim }}\n"
+    dest: /etc/ssh/milkyway-ca.pub
+    owner: root
+    group: root
+    mode: "0644"
+  when: platform_ssh_ca_public_key | length > 0
+
+- name: Keep bootstrap key access while disabling SSH password login
+  ansible.builtin.copy:
+    content: |
+      PubkeyAuthentication yes
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin prohibit-password
+      {% if platform_ssh_ca_public_key | length > 0 %}
+      TrustedUserCAKeys /etc/ssh/milkyway-ca.pub
+      {% endif %}
+    dest: /etc/ssh/sshd_config.d/00-milkyway-access.conf
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/sbin/sshd -t -f %s
+  register: platform_sshd_configuration
+
+- name: Validate complete SSH configuration
+  ansible.builtin.command: /usr/sbin/sshd -t
+  changed_when: false
+
+- name: Reload SSH when configuration changed
+  ansible.builtin.systemd_service:
+    name: ssh
+    state: reloaded
+  when: platform_sshd_configuration.changed
+
+- name: Verify fresh key access after SSH hardening
+  ansible.builtin.import_tasks: verify.yml

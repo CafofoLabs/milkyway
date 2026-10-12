@@ -1,0 +1,10 @@
+---
+# Alloy watches nothing: the configuration is read once at start, so a changed
+# config.alloy has no effect until the container is recreated. It supports
+# reload-on-SIGHUP, but a restart is the only thing that is also true for a
+# changed .env and a changed image tag.
+- name: Restart alloy
+  no_log: true
+  community.docker.docker_compose_v2:
+    project_src: "{{ alloy_deploy_dir }}"
+    state: restarted

@@ -1,0 +1,18 @@
+---
+- name: Prepare standalone Proxmox access
+  hosts: proxmox
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Apply narrow native bootstrap firewall
+      ansible.builtin.include_role:
+        name: proxmox_access
+        tasks_from: firewall
+      vars:
+        proxmox_firewall_cutover: false
+    - name: Configure baseline and enroll Tailscale
+      ansible.builtin.include_role:
+        name: platform_baseline
+    - name: Provision the scoped API identity and trusted root CA
+      ansible.builtin.include_role:
+        name: proxmox_access

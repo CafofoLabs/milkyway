@@ -1,0 +1,6 @@
+---
+- name: Prepare the immutable cloud-init template
+  hosts: proxmox
+  become: true
+  gather_facts: true
+  roles: [proxmox_template]

@@ -1,0 +1,40 @@
+#jinja2: trim_blocks: True, lstrip_blocks: True
+# Managed by Ansible — do not edit by hand.
+# Rendered from ansible/roles/observability/templates/rules/inventory.yml.j2.
+#
+# This file exists because the agents push rather than being scraped.
+#
+# A scraped target that dies keeps its series and goes `up == 0`, so "is it
+# dead" is one rule for all hosts and it is free. A pushing agent that dies
+# stops producing series altogether, and a series that does not exist matches
+# no expression — including `up == 0`. Absence is only detectable against a
+# list of what *should* be there, and the authoritative list is the Ansible
+# inventory, which is where this file comes from.
+#
+# So: adding a host to the inventory is what makes its absence an alert. There
+# is no second place to register it, and no host can be quietly unmonitored
+# because someone forgot the other step.
+#
+# The one opt-out is `observability_host_expected: false` in a host's
+# host_vars, for a host that is deliberately, indefinitely off rather than
+# merely down.
+
+groups:
+  - name: inventory
+    rules:
+{% for host in groups['all'] | sort if hostvars[host].get('observability_host_expected', true) %}
+      - alert: HostNotReporting
+        expr: absent(up{job="node", host="{{ host }}"})
+        for: {{ observability_host_down_after }}
+        labels:
+          severity: critical
+          host: {{ host }}
+        annotations:
+          summary: "{{ host }} has stopped reporting"
+          description: >-
+            No metrics have arrived from {{ host }} for
+            {{ observability_host_down_after }}. The host is in the {{ env_name }}
+            inventory, so it is expected to be running an Alloy agent pushing
+            to this server. Either the host is down, tailscaled is down on it,
+            or its agent is not running — check in that order.
+{% endfor %}

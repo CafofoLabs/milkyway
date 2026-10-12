@@ -1,0 +1,54 @@
+# Komodo — Build and deployment management tool.
+#
+# Official 3-service topology (MongoDB + Core + Periphery), adapted from
+# https://github.com/moghtech/komodo/blob/main/compose/mongo.compose.yaml
+# Core listens on loopback, proxied by Traefik.
+
+name: ${COMPOSE_PROJECT_NAME:-komodo}
+
+services:
+  mongo:
+    image: mongo:${MONGO_TAG:?MONGO_TAG is required}
+    labels:
+      komodo.skip:
+    command: --quiet --wiredTigerCacheSizeGB 0.25
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+      - mongo-config:/data/configdb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${KOMODO_DATABASE_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${KOMODO_DATABASE_PASSWORD}
+
+  core:
+    image: ghcr.io/moghtech/komodo-core:${COMPOSE_KOMODO_IMAGE_TAG:?COMPOSE_KOMODO_IMAGE_TAG is required}
+    init: true
+    restart: unless-stopped
+    depends_on:
+      - mongo
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${KOMODO_PORT:-9120}:9120"
+    env_file: .env
+    environment:
+      KOMODO_DATABASE_ADDRESS: mongo:27017
+    volumes:
+      - keys:/config/keys
+      - ${COMPOSE_KOMODO_BACKUPS_PATH:-./backups}:/backups
+
+  periphery:
+    image: ghcr.io/moghtech/komodo-periphery:${COMPOSE_KOMODO_IMAGE_TAG:?COMPOSE_KOMODO_IMAGE_TAG is required}
+    init: true
+    restart: unless-stopped
+    depends_on:
+      - core
+    env_file: .env
+    volumes:
+      - keys:/config/keys
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /proc:/proc
+      - ${PERIPHERY_ROOT_DIRECTORY:-/etc/komodo}:${PERIPHERY_ROOT_DIRECTORY:-/etc/komodo}
+
+volumes:
+  mongo-data:
+  mongo-config:
+  keys:

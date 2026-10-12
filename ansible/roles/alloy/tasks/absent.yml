@@ -1,0 +1,41 @@
+---
+# Take the agent off a host that should not be running one.
+#
+# Only reached when `alloy_enabled` is false, which nothing on the platform sets
+# — see defaults/main.yml. It is written to be safe on a host that never had the
+# agent as well as one that did, because "was it ever installed here?" is not a
+# question the caller should have to answer.
+
+- name: Look for a deployed agent
+  ansible.builtin.stat:
+    path: "{{ alloy_deploy_dir }}/docker-compose.yml"
+  register: alloy_absent_compose
+
+- name: Stop the agent and discard what it buffered
+  when: alloy_absent_compose.stat.exists
+  block:
+    # `--volumes` as well, which is the part worth being deliberate about: the
+    # named volume holds the write-ahead log — metrics and logs the agent has
+    # collected and not yet delivered. On a host that is being taken off
+    # monitoring there is nowhere for them to go, and keeping them would mean a
+    # host that reports nothing while holding data it will never send.
+    - name: Stop the agent
+      ansible.builtin.command:
+        cmd: >-
+          docker compose -f {{ alloy_deploy_dir }}/docker-compose.yml
+          down --volumes --remove-orphans
+      register: alloy_absent_down
+      changed_when: alloy_absent_down.stderr | length > 0
+
+    - name: Remove the deployment directory
+      ansible.builtin.file:
+        path: "{{ alloy_deploy_dir }}"
+        state: absent
+
+    - name: Report that this host no longer reports
+      ansible.builtin.debug:
+        msg: >-
+          The monitoring agent has been removed from {{ inventory_hostname }}
+          and its buffered data discarded. Nothing about this host reaches
+          the observability service — no metrics, no logs, and no alert when it
+          goes away. That is what alloy_enabled: false means.

@@ -1,0 +1,9 @@
+---
+platform_access_mode: bootstrap
+platform_timezone: UTC
+platform_tailscale_key_file: ""
+platform_tailscale_secret_path: platform/tailscale/auth_key
+platform_tailscale_tags: []
+platform_tailscale_required: true
+platform_initial_management_cidr: ""
+platform_ssh_identity_file: "{{ ansible_ssh_private_key_file | default('') }}"

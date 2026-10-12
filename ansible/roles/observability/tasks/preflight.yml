@@ -1,0 +1,76 @@
+---
+# Everything that can be checked before the host is touched. Each of these
+# produces a failure that is worse to diagnose after the fact than before.
+
+- name: Assert the listen address is set
+  ansible.builtin.assert:
+    that:
+      - observability_bind_address | length > 0
+    fail_msg: >-
+      observability_bind_address is empty. Prometheus and Loki accept writes
+      from an agent on every host, so they cannot listen on loopback — and
+      0.0.0.0 would publish the write endpoints on the LAN, which this platform
+      does not treat as a trust boundary. Set it to this host's tailnet
+      address; the inventory does that with `{{ '{{ tailscale_ip }}' }}`.
+
+- name: Assert the listen address is not a wildcard
+  ansible.builtin.assert:
+    that:
+      - observability_bind_address not in ['0.0.0.0', '::', '*']
+    fail_msg: >-
+      observability_bind_address is {{ observability_bind_address }}, which
+      publishes Prometheus and Loki on every interface this host has. Both
+      accept unauthenticated writes — see docs/observability.md — so the
+      interface they are on IS the access control. Use the tailnet address.
+
+- name: Read the addresses this host actually holds
+  ansible.builtin.set_fact:
+    observability_host_addresses: "{{ ansible_all_ipv4_addresses | default([]) }}"
+
+- name: Assert this host holds the address it is about to bind
+  ansible.builtin.assert:
+    that:
+      - observability_bind_address in observability_host_addresses
+    fail_msg: >-
+      This host has no interface holding {{ observability_bind_address }}
+      (it has {{ observability_host_addresses | join(', ') }}). Docker will
+      refuse to publish a port on an address that does not exist, and the
+      failure names the port rather than the address. If the address is a
+      Tailscale one, the usual cause is that tailscaled is not up yet.
+
+- name: Assert the public Grafana URL is set
+  ansible.builtin.assert:
+    that:
+      - observability_grafana_url | length > 0
+      - observability_grafana_url is match('^https?://')
+    fail_msg: >-
+      observability_grafana_url must be the full public URL Grafana is served
+      at, scheme included — Grafana builds its OIDC redirect URI from it, and
+      authentik rejects any callback that is not registered byte for byte.
+
+# The agents address this host by its tailnet IP, so a host that is not on the
+# tailnet collects nothing from anywhere else. Checked here rather than left to
+# fail later, because the symptom is an empty Grafana rather than an error.
+- name: Read the Tailscale backend state
+  ansible.builtin.command:
+    cmd: tailscale status --json
+  register: observability_tailscale
+  changed_when: false
+  failed_when: false
+
+- name: Assert Tailscale is up
+  ansible.builtin.assert:
+    that:
+      - observability_tailscale.rc == 0
+      - (observability_tailscale.stdout | from_json).BackendState == "Running"
+    fail_msg: >-
+      Tailscale is not running on this host. Every other host pushes its
+      metrics and logs to {{ observability_bind_address }}, which is a tailnet
+      address — without it this stack starts, looks healthy, and receives
+      nothing. Fix with `sudo tailscale up` and re-run.
+
+- name: Require a Tailscale IPv4 listener
+  ansible.builtin.assert:
+    that:
+      - observability_bind_address is match('^100[.](6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])[.][0-9]{1,3}[.][0-9]{1,3}$')
+    fail_msg: Bind user-facing infrastructure listeners only to the enrolled Tailscale address.

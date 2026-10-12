@@ -1,0 +1,299 @@
+---
+- name: Validate the environment before touching the host
+  ansible.builtin.import_tasks: preflight.yml
+  tags: [always]
+
+- name: Ensure local secrets directory exists
+  ansible.builtin.file:
+    path: "{{ authentik_secrets_dir }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+
+# The `password` lookup writes the file on first use and reads it back on every
+# later run. That is what makes this role idempotent without a secrets manager:
+# re-running never rotates a live instance's keys.
+- name: Inspect an existing Authentik deployment
+  ansible.builtin.stat:
+    path: "{{ authentik_deploy_dir }}/.env"
+  register: authentik_existing_environment
+
+- name: Inspect cached Authentik credentials
+  ansible.builtin.stat:
+    path: "{{ authentik_secrets_dir }}/{{ item }}"
+  loop: [secret_key, pg_password, bootstrap_password, bootstrap_token]
+  register: authentik_cached_credentials
+  delegate_to: localhost
+  become: false
+
+- name: Require the original credentials for an existing Authentik deployment
+  ansible.builtin.assert:
+    that:
+      - authentik_cached_credentials.results | selectattr('stat.exists', 'equalto', false) | list | length == 0
+    fail_msg: Restore the original protected Authentik credential cache before reapplying this deployment.
+  when: authentik_existing_environment.stat.exists
+
+- name: Generate or load secrets
+  ansible.builtin.set_fact:
+    authentik_secret_key: >-
+      {{ lookup('ansible.builtin.password', authentik_secrets_dir + '/secret_key',
+                length=64, chars=['ascii_letters', 'digits']) }}
+    authentik_pg_password: >-
+      {{ lookup('ansible.builtin.password', authentik_secrets_dir + '/pg_password',
+                length=40, chars=['ascii_letters', 'digits']) }}
+    authentik_bootstrap_password: >-
+      {{ lookup('ansible.builtin.password', authentik_secrets_dir + '/bootstrap_password',
+                length=32, chars=['ascii_letters', 'digits']) }}
+    authentik_bootstrap_token: >-
+      {{ lookup('ansible.builtin.password', authentik_secrets_dir + '/bootstrap_token',
+                length=60, chars=['ascii_letters', 'digits']) }}
+  no_log: true
+
+- name: Create deployment directory
+  ansible.builtin.file:
+    path: "{{ authentik_deploy_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+# Copied, never templated: the compose file in services/ is the single source
+# of truth and must stay runnable on its own.
+- name: Ship the compose stack
+  ansible.builtin.copy:
+    src: "{{ milkyway_services_dir }}/authentik/docker-compose.yml"
+    dest: "{{ authentik_deploy_dir }}/docker-compose.yml"
+    owner: root
+    group: root
+    mode: "0640"
+
+- name: Render environment file
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ authentik_deploy_dir }}/.env"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Pull images and start the stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ authentik_deploy_dir }}"
+    state: present
+    pull: missing
+    remove_orphans: true
+    wait: false
+  no_log: true
+
+# `docker compose up` returns as soon as containers start, but authentik is not
+# usable until migrations finish. Poll the readiness endpoint so that anything
+# downstream — notably `tofu apply` — can assume a working API.
+#
+# The probe runs on the target host against loopback, so it works unchanged
+# whether the port is published on 0.0.0.0 or only on 127.0.0.1.
+- name: Wait for authentik to report ready
+  block:
+    - name: Poll the readiness endpoint
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ authentik_port_http }}/-/health/ready/"
+        status_code: [200, 204]
+      register: ready_check
+      until: ready_check.status in [200, 204]
+      retries: "{{ authentik_ready_retries }}"
+      delay: "{{ authentik_ready_delay }}"
+      changed_when: false
+  rescue:
+    - name: Explain the readiness timeout
+      ansible.builtin.fail:
+        msg: >-
+          authentik did not become ready within
+          {{ authentik_ready_retries | int * authentik_ready_delay | int }}s.
+          On a first boot the server runs every database migration from empty,
+          which is slow on a small VM — raise authentik_ready_retries if the
+          host is simply slow. Otherwise check `make logs ENV={{ env_name }}`:
+          a worker killed by the OOM killer mid-migration is the usual cause,
+          and it needs swap (see the host_baseline role).
+
+# Readiness goes green before the worker has finished applying authentik's
+# default blueprints, and those blueprints create every object the OpenTofu
+# module looks up rather than creates. Without this wait,
+# `make deploy && make tofu-apply` fails against a freshly created instance.
+#
+# The blueprints do not land together: on an empty database the flows appeared
+# roughly a minute before the OAuth2 scope mappings did. Waiting on the flows
+# alone let `tofu apply` run early and fail with
+#   400 ... "goauthentik.io/providers/oauth2/scope-openid is not one of the
+#   available choices"
+# so every kind OpenTofu reads is polled separately. The authoritative list is
+# the `data` blocks under tofu/ — grep for `^data "` there, and add anything new
+# here as well.
+- name: Wait for default blueprints to be applied
+  block:
+    # A cheap general gate that soaks up most of the wait and turns a broken
+    # blueprint into an obvious failure. It is not sufficient on its own:
+    # instances enter this list as the worker discovers them, so "everything
+    # listed is successful" is trivially true early on. The per-object polls
+    # below are what actually guarantee OpenTofu will find what it reads.
+    #
+    # no_log throughout because the bootstrap token is in the request headers.
+    # The rescue below is what keeps a timeout diagnosable despite that.
+    - name: Wait for every discovered blueprint to report success
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ authentik_port_http }}/api/v3/managed/blueprints/?page_size=100"
+        headers:
+          Authorization: "Bearer {{ authentik_bootstrap_token }}"
+        status_code: 200
+      register: blueprint_check
+      until: >-
+        (blueprint_check.json.results | default([]) | length) > 0
+        and (blueprint_check.json.results | default([])
+             | selectattr('enabled')
+             | rejectattr('status', 'equalto', 'successful')
+             | list | length) == 0
+      retries: "{{ authentik_blueprint_retries }}"
+      delay: "{{ authentik_blueprint_delay }}"
+      changed_when: false
+      no_log: true
+
+    - name: Poll for the flows the default blueprints create
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ authentik_port_http }}/api/v3/flows/instances/?slug={{ item }}"
+        headers:
+          Authorization: "Bearer {{ authentik_bootstrap_token }}"
+        status_code: 200
+      register: flow_check
+      until: (flow_check.json.pagination.count | default(0)) > 0
+      retries: "{{ authentik_blueprint_retries }}"
+      delay: "{{ authentik_blueprint_delay }}"
+      loop: "{{ authentik_required_flows }}"
+      changed_when: false
+      no_log: true
+
+    # Listed and filtered here rather than queried with `?managed=<value>`:
+    # that parameter is validated against the values that already exist, so
+    # asking for a mapping the worker has not created yet answers 400 — the
+    # very state this task has to treat as "not ready yet".
+    - name: Poll for the OAuth2 scope mappings the default blueprints create
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ authentik_port_http }}/api/v3/propertymappings/provider/scope/?page_size=100"
+        headers:
+          Authorization: "Bearer {{ authentik_bootstrap_token }}"
+        status_code: 200
+      register: scope_check
+      until: >-
+        authentik_required_scope_mappings is subset(
+          scope_check.json.results | default([]) | map(attribute='managed') | list)
+      retries: "{{ authentik_blueprint_retries }}"
+      delay: "{{ authentik_blueprint_delay }}"
+      changed_when: false
+      no_log: true
+
+    - name: Poll for the embedded outpost
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ authentik_port_http }}/api/v3/outposts/instances/?page_size=100"
+        headers:
+          Authorization: "Bearer {{ authentik_bootstrap_token }}"
+        status_code: 200
+      register: outpost_check
+      until: >-
+        authentik_required_outpost in
+        (outpost_check.json.results | default([]) | map(attribute='name') | list)
+      retries: "{{ authentik_blueprint_retries }}"
+      delay: "{{ authentik_blueprint_delay }}"
+      changed_when: false
+      no_log: true
+
+    # The root modules adopt this brand with an `import` block instead of
+    # creating one — authentik requires the domain to be unique, so a second
+    # brand on "authentik-default" is rejected.
+    - name: Poll for the default brand
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ authentik_port_http }}/api/v3/core/brands/?page_size=100"
+        headers:
+          Authorization: "Bearer {{ authentik_bootstrap_token }}"
+        status_code: 200
+      register: brand_check
+      until: >-
+        authentik_required_brand_domain in
+        (brand_check.json.results | default([]) | map(attribute='domain') | list)
+      retries: "{{ authentik_blueprint_retries }}"
+      delay: "{{ authentik_blueprint_delay }}"
+      changed_when: false
+      no_log: true
+
+    # Not blueprint-created — this one comes from AUTHENTIK_BOOTSTRAP_* on the
+    # first start — but the root modules read it, so it is the same race.
+    - name: Poll for the bootstrap administrator
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ authentik_port_http }}/api/v3/core/users/?username={{ authentik_required_admin_username }}"
+        headers:
+          Authorization: "Bearer {{ authentik_bootstrap_token }}"
+        status_code: 200
+      register: admin_check
+      until: (admin_check.json.pagination.count | default(0)) > 0
+      retries: "{{ authentik_blueprint_retries }}"
+      delay: "{{ authentik_blueprint_delay }}"
+      changed_when: false
+      no_log: true
+  rescue:
+    # Re-queried rather than reported from the polls above, which are no_log.
+    # Only blueprint names reach the message, never the token.
+    - name: Collect blueprint status for the failure message
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ authentik_port_http }}/api/v3/managed/blueprints/?page_size=100"
+        headers:
+          Authorization: "Bearer {{ authentik_bootstrap_token }}"
+        status_code: 200
+      register: blueprint_status
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: Explain the blueprint timeout
+      ansible.builtin.fail:
+        msg: >-
+          authentik's default blueprints did not finish within
+          {{ authentik_blueprint_retries | int * authentik_blueprint_delay | int }}s
+          per object. Blueprints not reporting success:
+          {{ blueprint_status.json.results | default([])
+             | selectattr('enabled')
+             | rejectattr('status', 'equalto', 'successful')
+             | map(attribute='name') | list | join(', ')
+             | default('none — the API did not answer at all', true) }}.
+          Either the worker is not applying blueprints — check
+          `make logs ENV={{ env_name }}` — or the bootstrap token is wrong,
+          which happens when {{ authentik_secrets_dir }}/bootstrap_token
+          was regenerated after the database was created: AUTHENTIK_BOOTSTRAP_*
+          is only read while the database is empty, so the live instance still
+          has the original token. Expected flows:
+          {{ authentik_required_flows | join(', ') }}; scope mappings:
+          {{ authentik_required_scope_mappings | join(', ') }}; outpost:
+          {{ authentik_required_outpost }}; brand domain:
+          {{ authentik_required_brand_domain }}; admin:
+          {{ authentik_required_admin_username }}.
+
+- name: Ensure the consumer OpenTofu workspace exists
+  ansible.builtin.file:
+    path: "{{ milkyway_tofu_workdir }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+
+- name: Export connection details for OpenTofu
+  ansible.builtin.template:
+    src: generated-authentik.auto.tfvars.j2
+    dest: "{{ milkyway_tofu_workdir }}/generated-authentik.auto.tfvars"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  no_log: true
+
+- name: Report deployment details
+  ansible.builtin.debug:
+    msg:
+      - "authentik is ready at {{ authentik_host_url }}"
+      - "Admin interface: {{ authentik_host_url }}/if/admin/"
+      - "Username: akadmin"
+      - "Secrets cached in: {{ authentik_secrets_dir }}"

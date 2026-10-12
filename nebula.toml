@@ -40,5 +40,9 @@ commands = [
     ".nebula",
     "pytest",
     "tests"
+  ],
+  [
+    "make",
+    "infrastructure-check"
   ]
 ]

@@ -1,0 +1,12 @@
+---
+# `restarted` rather than `present`: compose only recreates a container when
+# the file that defines it changes, and a change to config/ or .env is
+# invisible to it. Prometheus and Loki reload some of their configuration on
+# SIGHUP, but not all of it, and Grafana reads its OIDC settings from the
+# environment once at start — so a restart is the only thing that is true for
+# every file this role writes.
+- name: Restart observability
+  no_log: true
+  community.docker.docker_compose_v2:
+    project_src: "{{ observability_deploy_dir }}"
+    state: restarted

@@ -1,0 +1,21 @@
+---
+# Distribution codename used to build the Docker apt repository URL.
+#
+# Docker publishes one suite per Ubuntu/Debian release, and a brand-new release
+# usually has no suite for weeks or months after it ships. When that is the case
+# `apt` fails with "does not have a Release file" — override this with the most
+# recent codename Docker does publish, which is a supported arrangement:
+#
+#   docker_apt_release: noble
+docker_apt_release: "{{ ansible_distribution_release }}"
+
+# User to add to the `docker` group so it can talk to the socket without sudo.
+# Defaults to the account Ansible connects as. Set to "" to skip.
+docker_group_user: "{{ ansible_user | default('') }}"
+
+docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin

@@ -1,0 +1,10 @@
+---
+# Traefik reloads the dynamic configuration on its own, but the static
+# configuration — entrypoints, the ACME resolver, the credentials in .env — is
+# only read at startup.
+- name: Restart traefik
+  no_log: true
+  community.docker.docker_compose_v2:
+    project_src: "{{ traefik_deploy_dir }}"
+    state: restarted
+    wait: false

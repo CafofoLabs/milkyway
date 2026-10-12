@@ -1,0 +1,345 @@
+---
+- name: Validate the environment before touching the host
+  ansible.builtin.import_tasks: preflight.yml
+  tags: [always]
+
+- name: Ensure local secrets directory exists
+  ansible.builtin.file:
+    path: "{{ openbao_secrets_dir }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+
+# --- Seal key ---------------------------------------------------------------
+# Generated once and cached on the control node. `creates:` is what makes this
+# idempotent, and idempotence here is not a nicety: regenerating this key would
+# make every secret already in the vault permanently unreadable.
+#
+# `tr -d '\n'` is load-bearing. The key must decode to exactly 32 bytes, and a
+# trailing newline makes it 33 — OpenBao then refuses to start with
+# "unknown encoding for AES-256 key", which reads like a format problem rather
+# than a stray byte.
+- name: Inspect the cached seal key
+  ansible.builtin.stat:
+    path: "{{ openbao_secrets_dir }}/openbao_unseal_key"
+    checksum_algorithm: sha256
+  register: openbao_cached_seal
+  delegate_to: localhost
+  become: false
+
+- name: Inspect the deployed seal key
+  ansible.builtin.stat:
+    path: "{{ openbao_deploy_dir }}/seal/unseal.key"
+    checksum_algorithm: sha256
+  register: openbao_existing_seal
+
+- name: Inspect existing vault storage
+  ansible.builtin.find:
+    paths: "{{ openbao_deploy_dir }}/data"
+    recurse: true
+    hidden: true
+    file_type: any
+  register: openbao_existing_storage
+
+- name: Refuse to replace the seal of an existing vault
+  ansible.builtin.assert:
+    that:
+      - openbao_cached_seal.stat.exists or (not openbao_existing_seal.stat.exists and openbao_existing_storage.matched | default(0) | int == 0)
+    fail_msg: Restore the original protected seal key; generating a replacement would make existing vault data unreadable.
+
+- name: Verify the cached seal matches the deployed key
+  ansible.builtin.assert:
+    that:
+      - openbao_cached_seal.stat.checksum == openbao_existing_seal.stat.checksum
+    fail_msg: The protected cached seal does not match the deployed vault; restore the correct key before continuing.
+  when:
+    - openbao_cached_seal.stat.exists
+    - openbao_existing_seal.stat.exists
+  no_log: true
+
+- name: Generate the seal key
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail;
+      umask 077 && openssl rand -hex 32 | tr -d '\n'
+      > {{ openbao_secrets_dir }}/openbao_unseal_key
+    executable: /bin/bash
+    creates: "{{ openbao_secrets_dir }}/openbao_unseal_key"
+  no_log: true
+  delegate_to: localhost
+  become: false
+
+- name: Load the seal key
+  ansible.builtin.set_fact:
+    openbao_seal_key: "{{ lookup('ansible.builtin.file', openbao_secrets_dir + '/openbao_unseal_key') }}"
+  no_log: true
+
+- name: Assert the seal key decodes to 32 bytes
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - openbao_seal_key | length == 64
+      - openbao_seal_key is match('^[0-9a-f]{64}$')
+    fail_msg: >-
+      {{ openbao_secrets_dir }}/openbao_unseal_key is not 64 hex characters, so
+      OpenBao will refuse to start. Do not simply delete it — if this vault has
+      already been initialised, that key is the only thing that can decrypt its
+      storage. Restore it from backup.
+
+# --- Layout -----------------------------------------------------------------
+
+- name: Create deployment directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ openbao_deploy_dir }}", owner: root, group: root, mode: "0750" }
+    # Owned by the container's uid: the image's entrypoint chowns its
+    # configuration directory on start, and failing that it logs a warning on
+    # every boot. Both are mounted read-only, so this is about the process
+    # being able to read them, not write them.
+    - { path: "{{ openbao_deploy_dir }}/config", owner: "{{ openbao_uid }}", group: "{{ openbao_gid }}", mode: "0750" }
+    - { path: "{{ openbao_deploy_dir }}/seal", owner: "{{ openbao_uid }}", group: "{{ openbao_gid }}", mode: "0700" }
+    # The Raft database. Must be writable by the container's uid — this is the
+    # whole reason it is a bind mount and not a named volume, which Docker
+    # would create owned by root.
+    - { path: "{{ openbao_deploy_dir }}/data", owner: "{{ openbao_uid }}", group: "{{ openbao_gid }}", mode: "0700" }
+  loop_control:
+    label: "{{ item.path }}"
+
+# Copied, never templated: the compose file and openbao.hcl in services/ are
+# the single source of truth and must stay runnable on their own. Everything
+# host-specific reaches OpenBao through the environment instead.
+- name: Ship the compose stack
+  ansible.builtin.copy:
+    src: "{{ milkyway_services_dir }}/openbao/docker-compose.yml"
+    dest: "{{ openbao_deploy_dir }}/docker-compose.yml"
+    owner: root
+    group: root
+    mode: "0640"
+
+- name: Ship the server configuration
+  ansible.builtin.copy:
+    src: "{{ milkyway_services_dir }}/openbao/config/openbao.hcl"
+    dest: "{{ openbao_deploy_dir }}/config/openbao.hcl"
+    owner: "{{ openbao_uid }}"
+    group: "{{ openbao_gid }}"
+    mode: "0640"
+  # OpenBao reads this file once, at start. `docker compose up` only recreates
+  # a container when the compose file changes, and a changed openbao.hcl is
+  # invisible to it — so without this the new configuration sits on disk,
+  # every task reports success, and the running vault is still on the old one.
+  # That is exactly how enabling the metrics listener appeared to do nothing.
+  notify: Restart openbao
+
+# Kept out of config/ on purpose: OpenBao scans its configuration directory,
+# and a secret has no business sitting in a scanned path.
+- name: Install the seal key
+  ansible.builtin.copy:
+    content: "{{ openbao_seal_key }}"
+    dest: "{{ openbao_deploy_dir }}/seal/unseal.key"
+    owner: "{{ openbao_uid }}"
+    group: "{{ openbao_gid }}"
+    mode: "0600"
+  no_log: true
+
+- name: Render environment file
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ openbao_deploy_dir }}/.env"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  notify: Restart openbao
+
+- name: Pull images and start the stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ openbao_deploy_dir }}"
+    state: present
+    pull: missing
+    remove_orphans: true
+    wait: false
+  no_log: true
+
+- name: Apply pending restarts before readiness
+  ansible.builtin.meta: flush_handlers
+
+# --- Readiness and initialisation -------------------------------------------
+# The probe runs on the target host against loopback, so it works unchanged
+# whether the port is published on 127.0.0.1 or anywhere else.
+#
+# /v1/sys/seal-status rather than /v1/sys/health: health answers 501 when
+# uninitialised and 503 when sealed, so "the server is up" and "the server is
+# usable" are indistinguishable from its status code alone. seal-status answers
+# 200 in every one of those states and says which it is.
+- name: Wait for OpenBao to answer
+  block:
+    - name: Poll the seal-status endpoint
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ openbao_port }}/v1/sys/seal-status"
+        status_code: 200
+      register: openbao_seal_status
+      until: openbao_seal_status.status == 200
+      retries: "{{ openbao_ready_retries }}"
+      delay: "{{ openbao_ready_delay }}"
+      changed_when: false
+  rescue:
+    - name: Collect what OpenBao logged
+      no_log: true
+      ansible.builtin.command:
+        cmd: "docker compose -f {{ openbao_deploy_dir }}/docker-compose.yml logs --tail=40"
+      register: openbao_log
+      changed_when: false
+      failed_when: false
+
+    - name: Explain the startup timeout
+      ansible.builtin.fail:
+        msg: >-
+          OpenBao did not answer within
+          {{ openbao_ready_retries | int * openbao_ready_delay | int }}s.
+          Read the log below — it names the cause directly.
+          .
+          "permission denied" on /openbao/data or /openbao/seal means the
+          bind-mounted directories are not owned by
+          {{ openbao_uid }}:{{ openbao_gid }}, the uid/gid inside the image.
+          "unknown encoding for AES-256 key" means the seal key does not decode
+          to exactly 32 bytes — a trailing newline is the usual reason.
+          "cluster address must be set" means BAO_CLUSTER_ADDR did not reach
+          the container.
+          .
+          OpenBao said:
+          Inspect the protected service logs on the host; logs are not copied into automation output.
+
+# Initialised over the API rather than `docker compose exec bao operator init`:
+# no dependency on the generated container name, and the JSON comes back
+# structured instead of being parsed out of a terminal.
+- name: Initialise the vault
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/sys/init"
+    method: PUT
+    body_format: json
+    body:
+      recovery_shares: "{{ openbao_recovery_shares | int }}"
+      recovery_threshold: "{{ openbao_recovery_threshold | int }}"
+    status_code: 200
+  register: openbao_init
+  when: not openbao_seal_status.json.initialized
+  no_log: true
+
+- name: Persist the root token and recovery keys
+  when: openbao_init is not skipped
+  block:
+    # The HTTP API and the `bao` CLI disagree on the field name: the API
+    # answers `recovery_keys_base64`, `-format=json` renames it to
+    # `recovery_keys_b64`. Asserted rather than defaulted, because the failure
+    # mode of guessing wrong is an empty recovery-key file that looks fine
+    # until the day it is needed.
+    - name: Assert the initialisation response has what it should
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - openbao_init.json.root_token | default('') | length > 0
+          - openbao_init.json.recovery_keys_base64 | default([]) | length
+            == openbao_recovery_shares | int
+        fail_msg: >-
+          /v1/sys/init did not return the expected fields. Expected a
+          root_token and {{ openbao_recovery_shares }} entries in
+          recovery_keys_base64, got keys:
+          {{ openbao_init.json.keys() | list | join(', ') }}.
+          The vault is now initialised but its recovery keys have not been
+          saved. Stop and recover the initialization response from the protected
+          control-node artifacts; never delete existing vault data.
+      no_log: true
+
+    - name: Write the root token
+      ansible.builtin.copy:
+        content: "{{ openbao_init.json.root_token }}"
+        dest: "{{ openbao_secrets_dir }}/openbao_root_token"
+        mode: "0600"
+      delegate_to: localhost
+      become: false
+      no_log: true
+
+    - name: Write the recovery keys
+      ansible.builtin.copy:
+        content: "{{ openbao_init.json.recovery_keys_base64 | join('\n') }}\n"
+        dest: "{{ openbao_secrets_dir }}/openbao_recovery_keys"
+        mode: "0600"
+      delegate_to: localhost
+      become: false
+      no_log: true
+
+- name: Check for a cached root token
+  ansible.builtin.stat:
+    path: "{{ openbao_secrets_dir }}/openbao_root_token"
+  register: openbao_cached_token
+  delegate_to: localhost
+  become: false
+
+# An instance that is already initialised cannot be made to hand out a new root
+# token without the recovery keys, so a missing cache is a dead end for
+# automation and needs to say so plainly.
+- name: Assert the root token is available
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - openbao_cached_token.stat.exists
+    fail_msg: >-
+      This vault is already initialised but
+      {{ openbao_secrets_dir }}/openbao_root_token is missing, so OpenTofu has
+      nothing to authenticate with. Regenerate one with the recovery keys in
+      {{ openbao_secrets_dir }}/openbao_recovery_keys:
+        bao operator generate-root -init
+        bao operator generate-root -otp=<otp>
+      and write the result to that path.
+
+- name: Load the root token
+  ansible.builtin.set_fact:
+    openbao_root_token: "{{ lookup('ansible.builtin.file', openbao_secrets_dir + '/openbao_root_token') }}"
+  no_log: true
+
+# The point of the static seal: no human unseals anything, ever. If this times
+# out the seal is not working and the whole design assumption is wrong, so it
+# is checked rather than assumed.
+- name: Wait for the vault to unseal itself
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/sys/seal-status"
+    status_code: 200
+  register: openbao_unsealed
+  until:
+    - openbao_unsealed.json.initialized
+    - not openbao_unsealed.json.sealed
+  retries: "{{ openbao_ready_retries }}"
+  delay: "{{ openbao_ready_delay }}"
+  changed_when: false
+
+- name: Ensure the consumer OpenTofu workspace exists
+  ansible.builtin.file:
+    path: "{{ milkyway_tofu_workdir }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+
+- name: Export connection details for OpenTofu
+  ansible.builtin.template:
+    src: generated-openbao.auto.tfvars.j2
+    dest: "{{ milkyway_tofu_workdir }}/generated-openbao.auto.tfvars"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  no_log: true
+
+- name: Report deployment details
+  ansible.builtin.debug:
+    msg:
+      - "OpenBao is {{ 'unsealed' if not openbao_unsealed.json.sealed else 'SEALED' }} at {{ openbao_host_url }}"
+      - "UI: {{ openbao_host_url }}/ui/"
+      - "Seal: {{ openbao_unsealed.json.type }} — no human unseal on reboot"
+      - "Secrets cached in: {{ openbao_secrets_dir }}"
+      - "Root token is break-glass only; normal access is OIDC via authentik"

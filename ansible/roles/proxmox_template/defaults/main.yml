@@ -1,0 +1,10 @@
+---
+proxmox_template_id: 9000
+proxmox_pool: milkyway
+proxmox_datastore: local-lvm
+proxmox_bridge: vmbr0
+proxmox_node_name: "{{ ansible_hostname }}"
+proxmox_template_snippet_datastore: local
+proxmox_template_image_version: 20261001-2618
+proxmox_template_image_url: "https://cloud.debian.org/images/cloud/trixie/{{ proxmox_template_image_version }}/debian-13-genericcloud-amd64-{{ proxmox_template_image_version }}.qcow2"
+proxmox_template_image_sha512: f46f0671a6e5bdec5291ab8972bae2f10e5408c2f64a74078f11efc2f06a436a9d0313ed50e0472542eeabf780e9f7c792ac0a314c6c20507fcd9fd81b468c3d

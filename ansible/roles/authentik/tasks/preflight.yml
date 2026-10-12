@@ -1,0 +1,60 @@
+---
+# Fail before anything is written, not halfway through a deploy.
+#
+# The expensive mistake this guards against is a wrong `authentik_host_url`.
+# It ends up in password-reset emails and in the outposts' connection settings,
+# and it is only consumed on the first boot for the bootstrap objects — so
+# noticing after the database exists means fixing it by hand in the UI.
+
+- name: Assert the environment is fully configured
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - env_name is defined
+      - env_name | length > 0
+    fail_msg: >-
+      `env_name` is not set. Every inventory needs it in group_vars/all.yml —
+      the consumer supplies protected local secret and OpenTofu workspace paths.
+
+- name: Assert authentik_host_url is set and well-formed
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - authentik_host_url is defined
+      - authentik_host_url is string
+      - authentik_host_url is match('^https://[^/]+/?$')
+    fail_msg: >-
+      `authentik_host_url` must be a scheme and host with no path, for example
+      "https://auth.example.com" without a URL path.
+      Got: {{ authentik_host_url | default('<undefined>') }}
+
+# The shipped inventories carry deliberately invalid values so that a forgotten
+# edit fails here rather than silently producing a working-but-wrong instance.
+- name: Assert the inventory placeholders have been replaced
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - "'example.com' not in authentik_host_url"
+      - "'example.com' not in authentik_bootstrap_email"
+      - ansible_host | default('') != '10.0.0.10'
+    fail_msg: >-
+      This inventory still holds the shipped placeholders. Edit
+      inventories/{{ env_name }}/hosts.yml and
+      inventories/{{ env_name }}/group_vars/authentik.yml, replacing every
+      value marked CHANGE ME, then re-run.
+
+
+- name: Assert loopback is trusted when a same-host proxy is implied
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - "'127.0.0.0/8' in authentik_trusted_proxy_cidrs"
+    fail_msg: >-
+      authentik_bind_address is {{ authentik_bind_address }}, which means the
+      reverse proxy reaches authentik over loopback. Setting
+      authentik_trusted_proxy_cidrs replaces authentik's built-in trust list
+      instead of extending it, so 127.0.0.0/8 must be in it — otherwise
+      X-Forwarded-Proto is ignored and every redirect downgrades to http://.
+  when:
+    - authentik_bind_address in ['127.0.0.1', '::1', 'localhost']
+    - authentik_trusted_proxy_cidrs | length > 0

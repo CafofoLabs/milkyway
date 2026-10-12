@@ -1,0 +1,20 @@
+---
+- name: Start monitoring with identity integration configured
+  hosts: observability
+  become: true
+  roles: [observability]
+
+- name: Start container management with identity integration configured
+  hosts: komodo
+  become: true
+  roles: [komodo]
+
+- name: Collect VM host and container telemetry
+  hosts: platform_vms
+  become: true
+  roles: [alloy]
+
+- name: Collect physical host telemetry without Docker
+  hosts: proxmox
+  become: true
+  roles: [alloy_native]

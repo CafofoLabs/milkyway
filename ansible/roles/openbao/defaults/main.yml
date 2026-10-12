@@ -1,0 +1,52 @@
+---
+# Where the stack lives on the target host.
+openbao_deploy_dir: /opt/milkyway/openbao
+
+# Pinned deliberately: an unpinned tag turns any `docker compose pull` into an
+# unplanned upgrade of the thing holding every secret.
+openbao_image: openbao/openbao
+openbao_tag: "2.6.1"
+openbao_compose_project: openbao
+
+# Loopback only — TLS is terminated by Traefik on this host.
+openbao_bind_address: "127.0.0.1"
+openbao_port: 8200
+
+# Public URL, set per environment in group_vars/openbao.yml. It ends up in
+# OpenBao's redirects, so it must be the name the proxy serves.
+openbao_host_url: ""
+
+# Raft refuses to start without a cluster address even as a single node.
+# Nothing dials it in this topology.
+openbao_cluster_addr: "https://127.0.0.1:8201"
+
+# The uid/gid the process runs as inside the official image. The seal key and
+# configuration are bind-mounted from the host, so the host-side ownership has
+# to match or OpenBao cannot read its own key.
+openbao_uid: 100
+openbao_gid: 1000
+
+# Generated secrets are cached here on the control node so re-runs are
+# idempotent and OpenTofu can reuse the same root token.
+openbao_secrets_dir: "{{ milkyway_secrets_dir }}"
+
+# Recovery keys, not unseal keys: with an auto-unseal seal the master key is
+# held by the seal, and `operator init` issues recovery keys instead. They
+# regenerate a root token or unseal in recovery mode; they cannot unseal a
+# running instance, because nothing needs to.
+#
+# 1-of-1 is deliberate rather than lazy. Splitting into shares only helps if
+# the shares are held by different people in different places — and here every
+# share would land in the same .secrets/ directory as the seal key, so the
+# extra shares would be ceremony with no security gain. Raise both together if
+# the keys ever get distributed for real.
+openbao_recovery_shares: 1
+openbao_recovery_threshold: 1
+
+openbao_ready_retries: 30
+openbao_ready_delay: 5
+
+# Source checkout is independent of the consumer playbook location.
+milkyway_services_dir: "{{ role_path }}/../../../services"
+milkyway_tofu_workdir: "{{ platform_tofu_workdir }}"
+milkyway_secrets_dir: "{{ platform_secret_files_dir }}"

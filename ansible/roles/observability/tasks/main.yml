@@ -1,0 +1,353 @@
+---
+- name: Validate the environment before touching the host
+  ansible.builtin.import_tasks: preflight.yml
+  tags: [always]
+
+- name: Ensure local secrets directory exists
+  ansible.builtin.file:
+    path: "{{ observability_secrets_dir }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+
+# The `password` lookup writes the file on first use and reads it back on every
+# later run, which is what keeps this idempotent: re-running never rotates a
+# live instance's admin password out from under whoever is holding it.
+- name: Inspect the existing observability deployment
+  ansible.builtin.stat:
+    path: "{{ observability_deploy_dir }}/.env"
+  register: observability_existing_environment
+
+- name: Inspect cached observability credentials
+  ansible.builtin.stat:
+    path: "{{ observability_secrets_dir }}/{{ item }}"
+  loop: ['grafana_admin_password']
+  register: observability_cached_credentials
+  delegate_to: localhost
+  become: false
+
+- name: Require original observability credentials for an existing deployment
+  ansible.builtin.assert:
+    that:
+      - observability_cached_credentials.results | selectattr('stat.exists', 'equalto', false) | list | length == 0
+    fail_msg: Restore the original protected credential cache before reapplying an existing observability deployment.
+  when: observability_existing_environment.stat.exists
+
+- name: Generate or load the local Grafana administrator password
+  ansible.builtin.set_fact:
+    observability_grafana_admin_password: >-
+      {{ lookup('ansible.builtin.password',
+                observability_secrets_dir + '/grafana_admin_password',
+                length=32, chars=['ascii_letters', 'digits']) }}
+  no_log: true
+
+# --- Single sign-on ---------------------------------------------------------
+- name: Read the OIDC credentials OpenTofu created
+  ansible.builtin.command:
+    argv: [tofu, output, -json, oauth2_applications]
+    chdir: "{{ milkyway_tofu_workdir }}"
+  register: observability_tofu_output
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  no_log: true
+
+- name: Select the Grafana identity registration
+  ansible.builtin.set_fact:
+    observability_oidc: "{{ (observability_tofu_output.stdout | from_json).get(observability_grafana_oidc_slug, {}) }}"
+  no_log: true
+
+- name: Require complete Grafana single sign-on configuration
+  ansible.builtin.assert:
+    that:
+      - observability_oidc.client_id | default('') | length > 0
+      - observability_oidc.client_secret | default('') | length > 0
+      - observability_oidc.authorization_url | default('') is match('^https://')
+      - observability_oidc.token_url | default('') is match('^https://')
+      - observability_oidc.userinfo_url | default('') is match('^https://')
+    fail_msg: Apply the infrastructure identity configuration before deploying Grafana.
+  no_log: true
+
+# --- Alert delivery ---------------------------------------------------------
+# An explicit receiver always wins; Telegram is optional infrastructure input.
+- name: Configure optional Telegram alert delivery
+  when:
+    - observability_alert_telegram | bool
+    - observability_alert_receiver | length == 0
+  no_log: true
+  block:
+    - name: Read the alert delivery credential from OpenBao
+      ansible.builtin.uri:
+        url: "{{ observability_alert_bao_addr }}/v1/{{ observability_alert_telegram_secret_mount }}/data/{{ observability_alert_telegram_secret_path }}"
+        headers:
+          X-Vault-Token: "{{ lookup('ansible.builtin.file', platform_bao_token_file) | trim }}"
+        status_code: 200
+        return_content: true
+      register: observability_alert_secret_read
+      delegate_to: localhost
+      become: false
+      changed_when: false
+
+    - name: Require a complete Telegram destination
+      ansible.builtin.assert:
+        that:
+          - observability_alert_secret_read.json.data.data[observability_alert_telegram_token_field] | length > 0
+          - observability_alert_secret_read.json.data.data[observability_alert_telegram_chat_field] | int != 0
+        fail_msg: The configured Telegram receiver requires its bot token and numeric chat ID in Bao.
+
+    - name: Assemble the Telegram receiver
+      ansible.builtin.set_fact:
+        observability_alert_receiver:
+          telegram_configs:
+            - bot_token: "{{ observability_alert_secret_read.json.data.data[observability_alert_telegram_token_field] }}"
+              chat_id: "{{ observability_alert_secret_read.json.data.data[observability_alert_telegram_chat_field] | int }}"
+              parse_mode: ""
+              send_resolved: true
+
+# --- Files ------------------------------------------------------------------
+# The stack root holds .env, which carries the OIDC client secret and the
+# local admin password, so it stays closed. Docker resolves a bind mount's
+# path as root, so a container reading config/ below is not affected by this.
+- name: Create the deployment directory
+  ansible.builtin.file:
+    path: "{{ observability_deploy_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+# Everything under config/ is mounted into a container and read by an
+# unprivileged user inside it — nobody for Prometheus, 472 for Grafana. These
+# have to be traversable by them, and 0750 root:root is not: the files are
+# world-readable but the directory cannot be entered, so Prometheus starts
+# cleanly with zero rules and Grafana with no data sources. Nothing errors,
+# because from the process's point of view the directory is simply empty.
+#
+# That is what the "loaded every rule group" assertion further down exists to
+# catch, and it did.
+- name: Create the configuration directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ observability_deploy_dir }}/config"
+    - "{{ observability_deploy_dir }}/config/rules"
+    - "{{ observability_deploy_dir }}/config/grafana"
+    - "{{ observability_deploy_dir }}/config/grafana/provisioning"
+    - "{{ observability_deploy_dir }}/config/grafana/provisioning/datasources"
+    - "{{ observability_deploy_dir }}/config/grafana/provisioning/dashboards"
+    - "{{ observability_deploy_dir }}/config/grafana/dashboards"
+
+# Copied, never templated: the compose file in services/ is the single source
+# of truth and must stay runnable on its own.
+- name: Ship the compose stack
+  ansible.builtin.copy:
+    src: "{{ milkyway_services_dir }}/observability/docker-compose.yml"
+    dest: "{{ observability_deploy_dir }}/docker-compose.yml"
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Restart observability
+
+# Holds the Grafana admin password and the OIDC client secret.
+- name: Render environment file
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ observability_deploy_dir }}/.env"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  notify: Restart observability
+
+- name: Render service configuration
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ observability_deploy_dir }}/config/{{ item.dest }}"
+    owner: root
+    group: root
+    # World-readable: these are read by processes running as nobody, 10001 and
+    # 472 inside their containers, and none of them holds a credential.
+    mode: "0644"
+  loop:
+    - { src: prometheus.yml.j2, dest: prometheus.yml }
+    - { src: loki.yml.j2, dest: loki.yml }
+    - { src: rules/platform.yml.j2, dest: rules/platform.yml }
+    - { src: rules/inventory.yml.j2, dest: rules/inventory.yml }
+    - { src: grafana/datasources.yml.j2, dest: grafana/provisioning/datasources/datasources.yml }
+    - { src: grafana/dashboards.yml.j2, dest: grafana/provisioning/dashboards/dashboards.yml }
+  loop_control:
+    label: "{{ item.dest }}"
+  notify: Restart observability
+
+# Alone, and not in the loop above, because this is the one file under config/
+# that can hold a credential: a configured Telegram receiver puts the bot token
+# in it. Two things follow.
+#
+# `no_log` — `make check` runs with --diff, and a diff of this file would print
+# the token to whatever terminal it ran in.
+#
+# Still 0644, deliberately. Alertmanager runs as nobody inside its container and
+# has to read this; the protection is the directory, not the file. The stack
+# root is 0750 root:root, so nothing unprivileged on the host can enter config/
+# at all, and Docker resolves a bind mount's path as root regardless.
+- name: Render the alerting configuration
+  ansible.builtin.template:
+    src: alertmanager.yml.j2
+    dest: "{{ observability_deploy_dir }}/config/alertmanager.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  no_log: true
+  notify: Restart observability
+
+# Dashboards are static JSON, so they are copied rather than templated — a
+# Jinja pass over a file full of braces is a trap waiting for the first
+# dashboard that uses a variable.
+- name: Ship the dashboards
+  ansible.builtin.copy:
+    src: dashboards/
+    dest: "{{ observability_deploy_dir }}/config/grafana/dashboards/"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart observability
+
+# --- Run --------------------------------------------------------------------
+# Prometheus and Loki publish on the tailnet address, and at boot Docker gets
+# there first: tailscaled has started but has not finished negotiating the
+# address, so `docker-proxy` tries to bind an address the host does not hold yet
+# and the container dies with "cannot assign requested address". Measured on
+# this host at nine seconds apart.
+#
+# The failure is worse than it sounds, for two reasons. `restart: unless-stopped`
+# does not recover it — the containers exhaust their restart attempts inside
+# that window. And a later `docker start` brings the process back *without its
+# port mappings*, so the stack reads as healthy from the host while every other
+# host's agent is writing into nothing.
+#
+# Non-local bind rather than the alternatives: ordering the Docker unit after
+# tailscaled does not help, because tailscaled *starting* is not the address
+# *existing*; and binding 0.0.0.0 would publish two unauthenticated write
+# endpoints on the LAN, which is the one thing preflight.yml refuses to allow.
+- name: Allow binding the tailnet address before tailscaled has assigned it
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_nonlocal_bind
+    value: "1"
+    state: present
+    sysctl_file: /etc/sysctl.d/60-milkyway-nonlocal-bind.conf
+    reload: true
+
+- name: Pull images and start the stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ observability_deploy_dir }}"
+    state: present
+    pull: missing
+    remove_orphans: true
+    wait: false
+  no_log: true
+
+- name: Apply pending restarts before checking readiness
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for each service to report ready
+  block:
+    - name: Poll the readiness endpoints
+      ansible.builtin.uri:
+        url: "{{ item.url }}"
+        status_code: [200, 204]
+      register: observability_ready
+      until: observability_ready.status in [200, 204]
+      retries: "{{ observability_ready_retries }}"
+      delay: "{{ observability_ready_delay }}"
+      changed_when: false
+      # Each URL uses the address that service is actually published on, which
+      # is not the same for all four and is the point of the design rather
+      # than an inconsistency. Prometheus and Loki are bound to the tailnet
+      # address because every other host writes to them; Alertmanager and
+      # Grafana are on loopback because nothing off this host talks to them
+      # directly. Polling 127.0.0.1 for the first two connects to nothing.
+      loop:
+        - name: Prometheus
+          url: "http://{{ observability_bind_address }}:{{ observability_prometheus_port }}/-/ready"
+        - name: Loki
+          url: "http://{{ observability_bind_address }}:{{ observability_loki_port }}/ready"
+        - name: Alertmanager
+          url: "http://127.0.0.1:{{ observability_alertmanager_port }}/-/ready"
+        - name: Grafana
+          url: "http://127.0.0.1:{{ observability_grafana_port }}/api/health"
+      loop_control:
+        label: "{{ item.name }}"
+  rescue:
+    - name: Collect what the stack logged
+      no_log: true
+      ansible.builtin.command:
+        cmd: >-
+          docker compose -f {{ observability_deploy_dir }}/docker-compose.yml
+          logs --tail=60
+      register: observability_logs
+      changed_when: false
+      failed_when: false
+
+    - name: Explain the readiness timeout
+      ansible.builtin.fail:
+        msg: >-
+          A service did not become ready within
+          {{ observability_ready_retries | int * observability_ready_delay | int }}s.
+          Loki is the usual one: it reports unready until its ingester has
+          joined the ring, and it refuses to start at all if
+          config/loki.yml names a schema older than the data already in its
+          volume. Prometheus refuses to start on a malformed rule file, which
+          is the other common cause after editing rules/.
+          .
+          The stack said:
+          Inspect the protected service logs on the host; logs are not copied into automation output.
+
+- name: Verify Grafana offers the configured OIDC login
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ observability_grafana_port }}/login/generic_oauth"
+    follow_redirects: none
+    status_code: [302, 303]
+  register: observability_login_redirect
+  changed_when: false
+  no_log: true
+
+- name: Verify Grafana delegates login to the configured identity provider
+  ansible.builtin.assert:
+    that:
+      - observability_login_redirect.location.startswith(observability_oidc.authorization_url)
+    fail_msg: Grafana is healthy but has not enabled the configured Authentik login.
+  no_log: true
+
+# Prometheus loads rules at startup and on SIGHUP, and a rule file that fails
+# to parse leaves it running with the *previous* rules — so a green deploy is
+# not evidence the rules that were just written are in force.
+- name: Confirm Prometheus loaded every rule group
+  ansible.builtin.uri:
+    url: "http://{{ observability_bind_address }}:{{ observability_prometheus_port }}/api/v1/rules"
+    status_code: 200
+  register: observability_rules
+  changed_when: false
+
+- name: Assert the inventory rule group is live
+  ansible.builtin.assert:
+    that:
+      - "'inventory' in (observability_rules.json.data.groups | map(attribute='name') | list)"
+    fail_msg: >-
+      Prometheus is running but has not loaded the 'inventory' rule group,
+      which is what alerts when a host stops reporting. Check
+      `docker compose -f {{ observability_deploy_dir }}/docker-compose.yml logs prometheus`
+      for a parse error in config/rules/inventory.yml.
+
+- name: Report deployment details
+  ansible.builtin.debug:
+    msg:
+      - "Grafana:      {{ observability_grafana_url }}"
+      - "Sign-in:      {{ 'authentik SSO' if observability_oidc | length > 0 else 'local admin only — run make tofu-apply, then make deploy-observability' }}"
+      - "Prometheus:   http://{{ observability_bind_address }}:{{ observability_prometheus_port }} (tailnet)"
+      - "Loki:         http://{{ observability_bind_address }}:{{ observability_loki_port }} (tailnet)"
+      - "Local admin:  {{ observability_grafana_admin_user }} / cached in {{ observability_secrets_dir }}/grafana_admin_password"

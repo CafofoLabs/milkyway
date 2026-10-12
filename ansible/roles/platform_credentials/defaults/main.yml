@@ -1,0 +1,16 @@
+---
+platform_access_mode: bootstrap
+platform_bao_addr: ""
+platform_bao_token_file: ""
+platform_credential_bootstrap_file: ""
+platform_credential_bao_path: ""
+platform_credential_field: key
+platform_hostinger_key_file: "{{ platform_secret_files_dir }}/hostinger_api_token"
+platform_bootstrap_bao_token_file: "{{ milkyway_secrets_dir }}/openbao_root_token"
+platform_bootstrap_secrets:
+  - path: platform/tailscale/auth_key
+    field: key
+    file: "{{ platform_tailscale_key_file }}"
+  - path: platform/hostinger/api
+    field: token
+    file: "{{ platform_hostinger_key_file }}"

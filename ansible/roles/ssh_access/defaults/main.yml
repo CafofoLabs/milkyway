@@ -1,0 +1,4 @@
+---
+platform_ssh_identity_file: "{{ ansible_ssh_private_key_file | default('') }}"
+platform_ssh_ca_public_key: ""
+platform_ssh_user: "{{ ansible_user | default('root') }}"

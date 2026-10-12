@@ -1,0 +1,103 @@
+---
+- name: Require pinned native collector and explicit destinations
+  ansible.builtin.assert:
+    that:
+      - ansible_architecture == 'x86_64'
+      - alloy_native_version == '1.18.0'
+      - alloy_native_sha256 | length == 64
+      - alloy_metrics_url | length > 0
+      - alloy_logs_url | length > 0
+      - not alloy_collect_docker
+    fail_msg: Native Alloy requires amd64, the checked release and private telemetry endpoints.
+
+- name: Install archive extraction support
+  ansible.builtin.apt:
+    name: unzip
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create native collector directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "/opt/milkyway/alloy/{{ alloy_native_version }}"
+    - /etc/milkyway-alloy
+    - /var/lib/milkyway-alloy
+    - "{{ alloy_textfile_dir }}"
+    - /var/log/journal
+
+- name: Download the official collector with a pinned checksum
+  ansible.builtin.get_url:
+    url: "https://github.com/grafana/alloy/releases/download/v{{ alloy_native_version }}/alloy-linux-amd64.zip"
+    dest: "/var/cache/alloy-{{ alloy_native_version }}-linux-amd64.zip"
+    checksum: "sha256:{{ alloy_native_sha256 }}"
+    mode: "0644"
+
+- name: Extract the verified collector
+  ansible.builtin.unarchive:
+    src: "/var/cache/alloy-{{ alloy_native_version }}-linux-amd64.zip"
+    dest: "/opt/milkyway/alloy/{{ alloy_native_version }}"
+    remote_src: true
+    creates: "/opt/milkyway/alloy/{{ alloy_native_version }}/alloy-linux-amd64"
+  notify: Restart native Alloy
+
+- name: Ensure native collector is executable
+  ansible.builtin.file:
+    path: "/opt/milkyway/alloy/{{ alloy_native_version }}/alloy-linux-amd64"
+    mode: "0755"
+
+- name: Render and validate native telemetry configuration
+  ansible.builtin.template:
+    src: config.alloy.j2
+    dest: /etc/milkyway-alloy/config.alloy
+    owner: root
+    group: root
+    mode: "0644"
+    validate: "/opt/milkyway/alloy/{{ alloy_native_version }}/alloy-linux-amd64 validate %s"
+  notify: Restart native Alloy
+
+- name: Install collector systemd unit without Docker
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/milkyway-alloy.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=MilkyWay native host metrics and journal collector
+      Wants=network-online.target
+      After=network-online.target tailscaled.service
+      [Service]
+      ExecStart=/opt/milkyway/alloy/{{ alloy_native_version }}/alloy-linux-amd64 run --server.http.listen-addr=127.0.0.1:12345 --storage.path=/var/lib/milkyway-alloy /etc/milkyway-alloy/config.alloy
+      Restart=on-failure
+      NoNewPrivileges=true
+      ProtectSystem=strict
+      ProtectHome=read-only
+      ReadWritePaths=/var/lib/milkyway-alloy
+      [Install]
+      WantedBy=multi-user.target
+  notify: Restart native Alloy
+
+- name: Enable native collector
+  ansible.builtin.systemd_service:
+    name: milkyway-alloy
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Apply collector changes before probing readiness
+  ansible.builtin.meta: flush_handlers
+
+- name: Require collector readiness
+  ansible.builtin.uri:
+    url: http://127.0.0.1:12345/-/ready
+    status_code: 200
+  register: alloy_native_ready
+  retries: 12
+  delay: 5
+  until: alloy_native_ready.status == 200

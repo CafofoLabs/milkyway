@@ -1,0 +1,4 @@
+---
+host_firewall_cutover: false
+platform_initial_management_cidr: ""
+platform_firewall_rollback_seconds: 180

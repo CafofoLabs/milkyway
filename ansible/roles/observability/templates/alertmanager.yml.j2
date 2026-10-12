@@ -1,0 +1,54 @@
+#jinja2: trim_blocks: True, lstrip_blocks: True
+# Managed by Ansible — do not edit by hand.
+# Rendered from ansible/roles/observability/templates/alertmanager.yml.j2.
+#
+# By default this delivers nothing. Alerts still fire, still group, still
+# resolve, and are still visible in Alertmanager and on the Grafana alert page
+# — they simply go nowhere afterwards.
+#
+# That is a deliberate default rather than an unfinished one. A receiver
+# pointing at a channel nobody reads is worse than no receiver: it converts a
+# visible gap into an invisible one, and it does so quietly.
+#
+# Two ways to turn delivery on, and the role prefers the first: set
+# `observability_alert_receiver` to any Alertmanager receiver configuration,
+# which is spliced in below verbatim; or set `observability_alert_telegram` and
+# let the role build one from the bot the platform already answers on. See
+# docs/observability.md, "Turning on delivery".
+#
+# When the second is what filled this in, the receiver below holds the bot
+# token. That is why this one file is rendered with `no_log` and why the
+# directory above it is not traversable by anything unprivileged.
+
+global:
+  resolve_timeout: 5m
+
+route:
+  # Group by what a human would want in one message: everything wrong with one
+  # host, or everything wrong with one service.
+  group_by: ["alertname", "host"]
+  # Wait before sending, so a host going down produces one notification rather
+  # than one per alert that fires as it goes.
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 12h
+  receiver: default
+
+receivers:
+  - name: default
+{% if observability_alert_receiver | length > 0 %}
+    {{ observability_alert_receiver | to_nice_yaml(indent=2) | indent(4) }}
+{% else %}
+    # No delivery configured. An empty receiver is valid and means "record it
+    # and stop" — Alertmanager's UI at 127.0.0.1:{{ observability_alertmanager_port }}
+    # and Grafana's alert page are where these are read.
+{% endif %}
+
+inhibit_rules:
+  # A host that is down will also fail every other check on it. Suppress the
+  # consequences so the notification says what is actually wrong.
+  - source_matchers:
+      - alertname = HostNotReporting
+    target_matchers:
+      - severity =~ "warning|critical"
+    equal: ["host"]

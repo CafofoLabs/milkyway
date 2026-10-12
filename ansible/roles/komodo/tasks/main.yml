@@ -1,0 +1,145 @@
+---
+- name: Validate Komodo inputs
+  ansible.builtin.assert:
+    that:
+      - komodo_host_url is match('^https://[^/]+/?$')
+      - komodo_image_tag is match('^v?[0-9]+[.][0-9]+[.][0-9]+([.-][a-zA-Z0-9.-]+)?$')
+      - komodo_mongo_tag is match('^[0-9]+[.][0-9]+[.][0-9]+([.-][a-zA-Z0-9.-]+)?$')
+      - komodo_server_name | length > 0
+    fail_msg: Set the HTTPS endpoint, host identity, and explicit Komodo/MongoDB release tags.
+
+# Deploys Komodo (Build and Deployment Manager): MongoDB + Core +
+# Periphery, per https://github.com/moghtech/komodo compose reference.
+
+- name: Ensure local secrets directory exists
+  ansible.builtin.file:
+    path: "{{ komodo_secrets_dir }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+
+- name: Inspect the existing komodo deployment
+  ansible.builtin.stat:
+    path: "{{ komodo_deploy_dir }}/.env"
+  register: komodo_existing_environment
+
+- name: Inspect cached komodo credentials
+  ansible.builtin.stat:
+    path: "{{ komodo_secrets_dir }}/{{ item }}"
+  loop: ['komodo_mongo_password', 'komodo_admin_password', 'komodo_webhook_secret', 'komodo_jwt_secret']
+  register: komodo_cached_credentials
+  delegate_to: localhost
+  become: false
+
+- name: Require original komodo credentials for an existing deployment
+  ansible.builtin.assert:
+    that:
+      - komodo_cached_credentials.results | selectattr('stat.exists', 'equalto', false) | list | length == 0
+    fail_msg: Restore the original protected credential cache before reapplying an existing komodo deployment.
+  when: komodo_existing_environment.stat.exists
+
+- name: Generate or load local Komodo secrets
+  ansible.builtin.set_fact:
+    komodo_mongo_password: >-
+      {{ lookup('ansible.builtin.password',
+                komodo_secrets_dir + '/komodo_mongo_password',
+                length=32, chars=['ascii_letters', 'digits']) }}
+    komodo_admin_password: >-
+      {{ lookup('ansible.builtin.password',
+                komodo_secrets_dir + '/komodo_admin_password',
+                length=32, chars=['ascii_letters', 'digits']) }}
+    komodo_webhook_secret: >-
+      {{ lookup('ansible.builtin.password',
+                komodo_secrets_dir + '/komodo_webhook_secret',
+                length=48, chars=['ascii_letters', 'digits']) }}
+    komodo_jwt_secret: >-
+      {{ lookup('ansible.builtin.password',
+                komodo_secrets_dir + '/komodo_jwt_secret',
+                length=48, chars=['ascii_letters', 'digits']) }}
+  no_log: true
+
+- name: Ensure deployment directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+  loop:
+    - "{{ komodo_deploy_dir }}"
+    - "{{ komodo_deploy_dir }}/backups"
+    - "{{ komodo_deploy_dir }}/periphery"
+
+# --- Single sign-on ----------------------------------------------------------
+- name: Read Komodo OIDC credentials from OpenBao
+  ansible.builtin.uri:
+    url: "{{ komodo_bao_addr }}/v1/{{ komodo_secret_mount }}/data/{{ komodo_secret_path }}"
+    headers:
+      X-Vault-Token: "{{ lookup('ansible.builtin.file', komodo_bao_token_file) | trim }}"
+    status_code: 200
+    return_content: true
+  register: komodo_secret_read
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  no_log: true
+
+- name: Parse OIDC credentials
+  ansible.builtin.set_fact:
+    komodo_oidc_client_id: "{{ komodo_secret_read.json.data.data.client_id | default('') }}"
+    komodo_oidc_client_secret: "{{ komodo_secret_read.json.data.data.client_secret | default('') }}"
+    komodo_oidc_issuer: "{{ komodo_secret_read.json.data.data.issuer | default('') }}"
+  no_log: true
+
+- name: Require complete Komodo single sign-on configuration
+  ansible.builtin.assert:
+    that:
+      - komodo_oidc_client_id | length > 0
+      - komodo_oidc_client_secret | length > 0
+      - komodo_oidc_issuer is match('^https://')
+    fail_msg: Apply the infrastructure identity configuration and publish the Komodo client to Bao before deploying Komodo.
+  no_log: true
+
+# --- Files ---------------------------------------------------------------------
+- name: Ship the compose stack
+  ansible.builtin.copy:
+    src: "{{ milkyway_services_dir }}/komodo/docker-compose.yml"
+    dest: "{{ komodo_deploy_dir }}/docker-compose.yml"
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Restart komodo
+
+- name: Render environment file
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ komodo_deploy_dir }}/.env"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  notify: Restart komodo
+
+# --- Run -----------------------------------------------------------------------
+- name: Pull images and start the Komodo stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ komodo_deploy_dir }}"
+    state: present
+    pull: missing
+    remove_orphans: true
+    wait: false
+  no_log: true
+
+- name: Apply pending restarts before readiness
+  ansible.builtin.meta: flush_handlers
+
+- name: Verify that Komodo Core is running and accepting requests
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ komodo_port }}/version"
+    status_code: 200
+  register: komodo_ping
+  until: komodo_ping.status == 200
+  retries: 20
+  delay: 5
+  changed_when: false

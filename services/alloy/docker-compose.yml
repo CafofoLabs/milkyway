@@ -1,0 +1,81 @@
+# Grafana Alloy — the collector that runs on every host.
+#
+# This file is intentionally standalone: copy this directory to any Docker
+# host, provide a `.env` and a `config/config.alloy`,
+# then run `docker compose up -d`. Ansible ships this exact file to every host
+# in the inventory — it is never templated.
+#
+# Alloy is the only container on this platform that is deliberately given a
+# broad view of its host: it reads /proc and /sys to produce host metrics, the
+# journal to produce host logs, and the Docker socket to discover containers.
+# There is no way to collect those without seeing them. What limits the blast
+# radius is that it only ever *reads* — see the read-only mounts below — and
+# that it holds no credential for anything.
+
+name: ${COMPOSE_PROJECT_NAME:-alloy}
+
+services:
+  alloy:
+    image: grafana/alloy:${ALLOY_TAG:?ALLOY_TAG is required}
+    restart: unless-stopped
+    # Host networking, deliberately, for two reasons that both matter. The
+    # services being scraped publish on this host's loopback address, which a
+    # bridged container cannot reach; and the push targets are Tailscale
+    # addresses, which are on an interface Docker's bridge does not route to.
+    network_mode: host
+    # So the process collector sees the host's processes rather than its own.
+    pid: host
+    command:
+      - run
+      - --server.http.listen-addr=127.0.0.1:${ALLOY_HTTP_PORT:-12345}
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./config/config.alloy:/etc/alloy/config.alloy:ro
+      # The whole filesystem, read-only. The unix exporter reads /proc and /sys
+      # through this, and reads filesystem usage for every real mount — which
+      # it can only do if it can see them.
+      - /:/rootfs:ro
+      # The journal. Read-only, and the machine-id alongside it because
+      # systemd's journal reader refuses to open an archive whose machine it
+      # cannot identify.
+      - /var/log/journal:/var/log/journal:ro
+      - /run/log/journal:/run/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+      # Container discovery and container logs. This is the mount worth
+      # noticing: read-only on the socket is advisory — the Docker API has no
+      # read-only mode, and anything that can talk to this socket can start a
+      # privileged container. It is here because collecting container logs has
+      # no other mechanism, and it is why this file grants Alloy nothing else.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy/data
+    # Root, because the journal and the Docker socket are both root-owned and
+    # the alternative is adding the container's user to groups on the host,
+    # which is a larger and less visible grant than this one.
+    user: root
+    security_opt:
+      - no-new-privileges:true
+    # No healthcheck, deliberately.
+    #
+    # Every other stack here uses the product's own CLI — `ak healthcheck`,
+    # `bao status`, `traefik healthcheck` — because a check that runs the thing
+    # being checked cannot drift from it. Alloy ships no such subcommand, and
+    # the image contains no HTTP client either: it has no wget and no curl, so
+    # the usual one-liner reports `unhealthy` forever while the agent is
+    # working perfectly. That is worse than no status at all.
+    #
+    # What checks it instead is the Ansible role, which polls
+    # http://127.0.0.1:12345/-/ready from the host after starting the agent.
+    # That is the better test regardless: it proves the endpoint is reachable
+    # from outside the container, which is the property that matters.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# The write-ahead log. Alloy buffers here when the central stack is
+# unreachable, which is what stops a Prometheus restart costing every host's
+# metrics for the duration.
+volumes:
+  alloy-data:

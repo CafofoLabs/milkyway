@@ -1,0 +1,22 @@
+#cloud-config
+package_update: true
+package_upgrade: false
+packages:
+  - qemu-guest-agent
+ssh_pwauth: false
+disable_root: true
+ssh_deletekeys: true
+ssh_genkeytypes:
+  - ed25519
+  - rsa
+write_files:
+  - path: /etc/ssh/sshd_config.d/10-milkyway-bootstrap.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin no
+runcmd:
+  - [systemctl, enable, --now, qemu-guest-agent]
+  - [systemctl, reload, ssh]

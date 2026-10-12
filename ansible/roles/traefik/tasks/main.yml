@@ -1,0 +1,221 @@
+---
+- name: Validate the environment before touching the host
+  ansible.builtin.import_tasks: preflight.yml
+  tags: [always]
+
+- name: Create deployment directory
+  ansible.builtin.file:
+    path: "{{ traefik_deploy_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Create dynamic configuration directory
+  ansible.builtin.file:
+    path: "{{ traefik_deploy_dir }}/dynamic"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+# Copied, never templated: the compose file in services/ is the single source
+# of truth and must stay runnable on its own.
+- name: Ship the compose stack
+  ansible.builtin.copy:
+    src: "{{ milkyway_services_dir }}/traefik/docker-compose.yml"
+    dest: "{{ traefik_deploy_dir }}/docker-compose.yml"
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Restart traefik
+
+# acme.json stores the ACME account registration as well as the certificates,
+# and an account is specific to one CA. Pointing an existing acme.json at a
+# different directory — the staging-to-production flip everyone eventually
+# makes — leaves Traefik holding a registration the new CA has never heard of,
+# and it fails to issue anything until the file is cleared.
+#
+# Recording which CA the current state belongs to is what keeps `make deploy`
+# idempotent across that change instead of requiring a manual cleanup.
+# The marker is the only record of which CA the stored state belongs to, so a
+# missing marker means "unknown" — and unknown has to be treated as wrong. That
+# covers the host deployed before this check existed, which is holding a
+# staging account nothing else would notice.
+- name: Check whether this host has been deployed before
+  ansible.builtin.stat:
+    path: "{{ traefik_deploy_dir }}/.env"
+  register: traefik_previous_deploy
+
+- name: Read which CA the stored ACME state belongs to
+  ansible.builtin.slurp:
+    src: "{{ traefik_deploy_dir }}/.acme-ca"
+  register: traefik_stored_ca
+  failed_when: false
+  changed_when: false
+
+- name: Discard ACME state that does not belong to the configured CA
+  when:
+    # Nothing to discard on a host that has never been deployed — and compose
+    # cannot even parse its own file without the .env this would be missing.
+    - traefik_previous_deploy.stat.exists
+    - (traefik_stored_ca.content | default('') | b64decode | trim) != acme_ca_servers[acme_ca_server]
+  block:
+    - name: Explain what is being discarded
+      ansible.builtin.debug:
+        msg: >-
+          The stored ACME state belongs to
+          {{ traefik_stored_ca.content | default('') | b64decode | trim
+             | default('an unrecorded CA', true) }}
+          but this deploy targets {{ acme_ca_servers[acme_ca_server] }}.
+          Removing the stored account and certificates so they are re-issued
+          against the right CA — this spends one certificate from that CA's
+          rate limit per hostname.
+
+    - name: Remove the stack and its ACME volume
+      no_log: true
+      community.docker.docker_compose_v2:
+        project_src: "{{ traefik_deploy_dir }}"
+        state: absent
+        remove_volumes: true
+
+# Holds the DNS provider's API token, which for Hostinger is account-wide.
+- name: Render environment file
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ traefik_deploy_dir }}/.env"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  notify: Restart traefik
+
+# Traefik watches this directory, so a route change is picked up without a
+# restart. The handler above is only for the static configuration.
+- name: Render routers
+  ansible.builtin.template:
+    src: routers.yml.j2
+    dest: "{{ traefik_deploy_dir }}/dynamic/routers.yml"
+    owner: root
+    group: root
+    mode: "0640"
+
+- name: Pull images and start the stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ traefik_deploy_dir }}"
+    state: present
+    pull: missing
+    remove_orphans: true
+    wait: false
+  no_log: true
+
+- name: Apply pending restarts before waiting for certificates
+  ansible.builtin.meta: flush_handlers
+
+# A DNS-01 issuance is slow — write the TXT record, wait for public resolvers
+# to serve it, wait for the CA to validate — and Traefik reports itself healthy
+# throughout, serving its own self-signed certificate in the meantime. So the
+# check that matters is which certificate is actually presented for each name.
+#
+# Done with openssl against the proxy's own address rather than curl against
+# the public name: the staging CA is not in any trust store, so every
+# certificate-validating client would fail here even on success.
+- name: Wait for a certificate to be issued for each hostname
+  block:
+    - name: Poll the certificate presented for each hostname
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          echo | openssl s_client
+          -connect {{ traefik_bind_address }}:{{ traefik_https_port }}
+          -servername {{ item.host }} 2>/dev/null
+          | openssl x509 -noout -issuer -dates
+        executable: /bin/bash
+      register: cert_check
+      # Traefik serves "TRAEFIK DEFAULT CERT" until a real certificate exists,
+      # so that string is precisely the "not ready yet" condition.
+      until: cert_check.rc == 0 and 'TRAEFIK DEFAULT CERT' not in cert_check.stdout
+      retries: "{{ traefik_cert_retries }}"
+      delay: "{{ traefik_cert_delay }}"
+      changed_when: false
+      loop: "{{ traefik_routers }}"
+      loop_control:
+        label: "{{ item.host }}"
+  rescue:
+    - name: Collect the ACME errors Traefik logged
+      no_log: true
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          docker compose -f {{ traefik_deploy_dir }}/docker-compose.yml logs --tail=200
+          | grep -iE 'acme|certificate|lego' | tail -25
+        executable: /bin/bash
+      register: acme_log
+      changed_when: false
+      failed_when: false
+
+    - name: Explain the certificate timeout
+      ansible.builtin.fail:
+        msg: >-
+          No certificate was issued within
+          {{ traefik_cert_retries | int * traefik_cert_delay | int }}s.
+          Read the log below for which one this is — the message that matters
+          is the last "Unable to obtain ACME certificate" line.
+          .
+          "NXDOMAIN for _acme-challenge.<host>" from an AUTHORITATIVE
+          nameserver means the record was never written, or was written and
+          then destroyed by a concurrent challenge against the same zone. The
+          playbook runs one host at a time to prevent the latter; check nothing
+          else is issuing against {{ platform_domain | default('this zone') }}
+          at the same time.
+          .
+          The same error naming a RECURSIVE resolver (1.1.1.1, 8.8.8.8) means
+          acme_dns_resolvers is pointed at recursors, which cache the negative
+          answer for longer than lego waits. It must list the zone's
+          authoritative nameservers.
+          .
+          An authentication or 4xx error from the provider means the token is
+          wrong or lacks access to the zone. "too many certificates" means the
+          rate limit is spent — 5 duplicates per week per hostname — and
+          acme_ca_server can be set to "staging" to keep working meanwhile.
+          .
+          Traefik said:
+          Inspect the protected service logs on the host; logs are not copied into automation output.
+
+- name: Verify production certificate trust and hostname
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - s_client
+      - -connect
+      - "{{ traefik_bind_address }}:{{ traefik_https_port }}"
+      - -servername
+      - "{{ item.host }}"
+      - -verify_hostname
+      - "{{ item.host }}"
+      - -verify_return_error
+    stdin: ""
+  loop: "{{ traefik_routers }}"
+  loop_control:
+    label: "{{ item.host }}"
+  changed_when: false
+  when: acme_ca_server == 'production'
+
+# Written only once certificates actually exist. Recording it earlier would
+# mean a deploy that failed halfway left a marker claiming state it does not
+# have, and the next run would skip the cleanup it still needs.
+- name: Record the CA the ACME state now belongs to
+  ansible.builtin.copy:
+    content: "{{ acme_ca_servers[acme_ca_server] }}\n"
+    dest: "{{ traefik_deploy_dir }}/.acme-ca"
+    owner: root
+    group: root
+    mode: "0640"
+
+- name: Report the certificates now being served
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.host }} → {{ item.stdout_lines | join(' | ') }}
+  loop: "{{ cert_check.results }}"
+  loop_control:
+    label: "{{ item.item.host }}"

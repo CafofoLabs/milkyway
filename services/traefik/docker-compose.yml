@@ -1,0 +1,117 @@
+# Traefik — TLS termination for whatever this host serves.
+#
+# This file is intentionally standalone: copy this directory to any Docker
+# host, provide a `.env` and a `dynamic/` directory of
+# routers, then run `docker compose up -d`. Ansible ships this exact file to
+# the target host — it is never templated.
+#
+# Certificates are issued over ACME DNS-01. That is not a stylistic choice: the
+# hosts are reachable only over Tailscale and the ISP blocks inbound 80/443, so
+# HTTP-01 and TLS-ALPN-01 cannot work. DNS-01 proves control of the name
+# without anyone connecting to this host at all. See docs/dns-and-tls.md.
+#
+# Nothing here names a DNS provider. The provider is one variable and its
+# credentials arrive through `env_file`, so switching from Hostinger to
+# anything else lego supports is a change to `.env` alone.
+
+name: ${COMPOSE_PROJECT_NAME:-traefik}
+
+services:
+  traefik:
+    image: traefik:${TRAEFIK_TAG:?TRAEFIK_TAG is required}
+    restart: unless-stopped
+    # Host networking, deliberately. The services being proxied publish their
+    # ports on this host's loopback address, and a container on a bridge
+    # network cannot reach the host's 127.0.0.1. It also means the entrypoint
+    # addresses below are what controls which interface is exposed — `ports:`
+    # is ignored in this mode.
+    network_mode: host
+    # Carries the DNS provider's credentials, whatever they happen to be
+    # called. This is what keeps the compose file provider-agnostic.
+    env_file:
+      - .env
+    command:
+      - --global.checknewversion=false
+      - --global.sendanonymoususage=false
+      - --log.level=${LOG_LEVEL:-INFO}
+      - --accesslog=true
+
+      # Bound to one address, never 0.0.0.0: with host networking that would
+      # publish the proxy on the LAN as well as the tailnet.
+      - --entrypoints.web.address=${BIND_ADDRESS:?BIND_ADDRESS is required}:${HTTP_PORT:-80}
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=${BIND_ADDRESS}:${HTTPS_PORT:-443}
+
+      # Health endpoint. "traefik" is the internal entrypoint `--ping` uses by
+      # default, and its default address is :8080 — on every interface, which
+      # with host networking would expose it. Pinning it to loopback keeps the
+      # default name, which matters: the healthcheck below runs as a separate
+      # process with none of these flags, so it can only find the endpoint if
+      # the endpoint is where it expects.
+      - --entrypoints.traefik.address=127.0.0.1:8080
+      - --ping=true
+
+      # Prometheus metrics, on their own entrypoint pinned to loopback — never
+      # on `websecure`, which is published on the tailnet and would serve them
+      # to anything that could reach the proxy. The monitoring agent runs on
+      # this host and scrapes them locally.
+      #
+      # These are worth having for one metric in particular:
+      # traefik_tls_certs_not_after. Certificate renewal here happens over
+      # DNS-01 against a third-party API, it is the failure most likely to go
+      # unnoticed, and its consequence is every service on this host becoming
+      # unreachable at once.
+      - --entrypoints.metrics.address=127.0.0.1:${METRICS_PORT:-8082}
+      - --metrics.prometheus=true
+      - --metrics.prometheus.entrypoint=metrics
+      - --metrics.prometheus.addentrypointslabels=true
+      - --metrics.prometheus.addrouterslabels=true
+      - --metrics.prometheus.addserviceslabels=true
+
+      # Routers come from files rather than Docker labels: the things being
+      # proxied are not containers Traefik can see (authentik and OpenBao run
+      # in their own compose projects), and a label-driven proxy that can read
+      # the Docker socket is a much larger blast radius.
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
+
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL:?ACME_EMAIL is required}
+      - --certificatesresolvers.le.acme.storage=/acme/acme.json
+      - --certificatesresolvers.le.acme.caserver=${ACME_CA_SERVER:?ACME_CA_SERVER is required}
+      - --certificatesresolvers.le.acme.dnschallenge=true
+      - --certificatesresolvers.le.acme.dnschallenge.provider=${ACME_DNS_PROVIDER:?ACME_DNS_PROVIDER is required}
+      # Check propagation against the zone's own authoritative nameservers, not
+      # against public recursive resolvers.
+      #
+      # This is not a preference. A recursive resolver that is asked for
+      # _acme-challenge.<host> before the record exists caches the NXDOMAIN for
+      # the zone's SOA minimum — 600s here — which is an order of magnitude
+      # longer than lego will wait. Every subsequent attempt then re-poisons
+      # the cache, so issuance can never succeed. Authoritative servers have no
+      # negative cache, and they are what the CA ultimately validates against.
+      - --certificatesresolvers.le.acme.dnschallenge.resolvers=${ACME_DNS_RESOLVERS:?ACME_DNS_RESOLVERS is required}
+      # The DNS provider's API may acknowledge a write before serving it.
+      # Waiting once beats discovering it through a failed poll.
+      - --certificatesresolvers.le.acme.dnschallenge.propagation.delaybeforechecks=${ACME_DELAY_BEFORE_CHECKS:-15s}
+    volumes:
+      - ./dynamic:/etc/traefik/dynamic:ro
+      # acme.json holds the account key and every issued private key. Traefik
+      # refuses to start if it is not 0600, which it enforces itself.
+      - acme:/acme
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  acme:

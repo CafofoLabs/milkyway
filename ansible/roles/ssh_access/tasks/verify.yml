@@ -1,0 +1,47 @@
+---
+- name: Require an actual tailnet address and bootstrap identity
+  ansible.builtin.assert:
+    that:
+      - platform_tailnet_address is defined
+      - platform_tailnet_address is match('^100\.')
+      - platform_ssh_identity_file | length > 0
+
+- name: Read the public SSH host key over the already trusted transport
+  ansible.builtin.slurp:
+    src: /etc/ssh/ssh_host_ed25519_key.pub
+  register: platform_public_host_key
+
+- name: Bind the known host key to the discovered tailnet address
+  ansible.builtin.known_hosts:
+    name: "{{ platform_tailnet_address }}"
+    key: "{{ platform_tailnet_address }} {{ platform_public_host_key.content | b64decode | trim }}"
+    hash_host: true
+    state: present
+  delegate_to: localhost
+  become: false
+
+# No multiplexed connection: this must exercise a fresh authentication path.
+- name: Verify a fresh SSH session over Tailscale
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -T
+      - -i
+      - "{{ platform_ssh_identity_file }}"
+      - -o
+      - IdentitiesOnly=yes
+      - -o
+      - BatchMode=yes
+      - -o
+      - StrictHostKeyChecking=yes
+      - -o
+      - ControlMaster=no
+      - -o
+      - ControlPath=none
+      - -o
+      - ConnectTimeout=10
+      - "{{ platform_ssh_user }}@{{ platform_tailnet_address }}"
+      - 'true'
+  delegate_to: localhost
+  become: false
+  changed_when: false

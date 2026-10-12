@@ -1,0 +1,123 @@
+---
+# Where the stack lives on the target host.
+observability_deploy_dir: /opt/milkyway/observability
+
+# Pinned deliberately, like every other stack here. Prometheus and Loki both
+# migrate their on-disk format between minor versions, so an unpinned tag turns
+# `docker compose pull` into an unplanned and occasionally one-way upgrade.
+observability_prometheus_tag: "v3.13.1"
+observability_loki_tag: "3.7.4"
+observability_alertmanager_tag: "v0.33.1"
+observability_grafana_tag: "13.1.1"
+
+observability_compose_project: observability
+
+# The address Prometheus and Loki listen on. No default: every agent on the
+# platform writes to these two ports, so they cannot be on loopback — and
+# 0.0.0.0 would put them on the LAN, which is not a trust boundary here. The
+# inventory sets this to the host's tailnet address.
+observability_bind_address: ""
+
+observability_prometheus_port: 9090
+observability_loki_port: 3100
+observability_alertmanager_port: 9093
+observability_grafana_port: 3000
+
+# How long telemetry is kept.
+#
+# 30 days is chosen against what the data is for rather than against the disk:
+# it covers "was this happening last month too", which is the question a
+# platform this size actually asks. The size cap is the backstop for a
+# cardinality mistake — a single application shipping a per-request label can
+# fill a disk far faster than the time limit would ever trigger.
+observability_metrics_retention: "30d"
+observability_metrics_retention_size: "64GB"
+observability_logs_retention: "720h"
+
+# Scrape and evaluation intervals. 30s rather than the 15s default: nothing
+# here is user-facing traffic where a 15s gap hides an incident, and it halves
+# both the sample count and the write volume from every agent.
+observability_scrape_interval: "30s"
+observability_evaluation_interval: "30s"
+
+# --- Grafana ----------------------------------------------------------------
+# Public URL, which must match what the reverse proxy serves. Grafana builds
+# its OIDC redirect URI from this, and authentik rejects a callback that does
+# not match the registered one exactly.
+observability_grafana_url: ""
+
+# Local fallback administrator. Normal access is OIDC through authentik; this
+# account is what remains when authentik is the thing that is broken, so it is
+# the same shape of decision as the break-glass SSH key. The password is
+# generated on the control node and cached, never committed.
+observability_grafana_admin_user: admin
+
+# authentik group names, mapped to Grafana's built-in roles. These are matched
+# against the `groups` claim, so they must be the group names in authentik —
+# keep them in step with tofu/environments/<env>/main.tf.
+observability_grafana_admin_group: platform-admins
+observability_grafana_viewer_group: platform-users
+
+# The application slug registered in authentik. Used to build the OIDC
+# endpoints, so it must match the `slug` on the grafana entry in
+# `oauth2_applications`.
+observability_grafana_oidc_slug: grafana
+
+# --- Alerting ---------------------------------------------------------------
+# Where alerts are delivered. Empty means they are recorded and visible in
+# Alertmanager and Grafana, but nothing is sent anywhere — which is the honest
+# default, because a receiver that points at a channel nobody reads is worse
+# than no receiver at all. See docs/observability.md, "Turning on delivery".
+#
+# Set by hand for any Alertmanager integration; the value is spliced into the
+# receiver verbatim. Leaving it empty and switching on the Telegram delivery
+# below fills it in instead — an explicit value here always wins, so turning
+# that on can never quietly replace a receiver somebody chose.
+observability_alert_receiver: {}
+
+# Deliver over Telegram, using the bot the platform already answers on.
+#
+# Off by default here and switched on per environment, so that the role's own
+# default stays "delivers nothing" rather than "delivers somewhere, if a vault
+# happens to answer".
+#
+# Alertmanager talks to the Bot API itself rather than handing the message to
+# an application. Both would arrive on the same phone, and the difference only shows on
+# the day it matters: an alert routed through an LLM agent stops being
+# delivered exactly when that agent is the thing that has fallen over, and
+# "the alerting is down" is not an alert anything else will send.
+observability_alert_telegram: false
+
+# Optional infra-owned Telegram delivery credentials.
+observability_alert_telegram_secret_mount: secret
+observability_alert_telegram_secret_path: platform/observability/telegram
+
+# Which chat to send to. The bot can only open a conversation with someone who
+# has written to it first, so the destination has to be an id that already
+# talks to it — which is what `chat_id` holds. The first entry
+# is used when it names several.
+observability_alert_telegram_chat_field: chat_id
+observability_alert_telegram_token_field: bot_token
+
+# Read from the control node, like every other `platform/` secret. That needs a
+# session a person authenticated for; the development AppRole reaches `dev/`
+# and nothing above it.
+observability_alert_bao_addr: "{{ openbao_host_url }}"
+
+# How long a host may stop reporting before it is considered down. Generous
+# against the scrape interval: a single missed push during a `docker compose
+# pull` should not page anyone.
+observability_host_down_after: "5m"
+
+# Generated secrets are cached here on the control node so re-runs are
+# idempotent — the same reason the authentik role does it.
+observability_secrets_dir: "{{ milkyway_secrets_dir }}"
+
+# How long to wait for each service to report ready.
+observability_ready_retries: 30
+observability_ready_delay: 10
+
+# Source checkout is independent of the consumer playbook location.
+milkyway_services_dir: "{{ role_path }}/../../../services"
+milkyway_tofu_workdir: "{{ platform_tofu_workdir }}"
+milkyway_secrets_dir: "{{ platform_secret_files_dir }}"

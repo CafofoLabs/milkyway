@@ -1,0 +1,73 @@
+# OpenBao — the platform's secrets store.
+#
+# This file is intentionally standalone: copy this directory to any Docker
+# host, provide a `.env` and a seal key,
+# then run `docker compose up -d`. Ansible ships this exact file to the target
+# host — it is never templated, so what you test locally is what runs in
+# production.
+#
+# OpenBao is a fork of Vault 1.14 under MPL-2.0. It is used here rather than
+# Vault Community for one concrete reason: `seal "static"` lets the instance
+# unseal itself from a key on local disk, with no cloud KMS and no second
+# vault. Vault Community has no equivalent, so it would need a human to type
+# unseal shares after every reboot.
+
+name: ${COMPOSE_PROJECT_NAME:-openbao}
+
+services:
+  openbao:
+    image: ${OPENBAO_IMAGE:-openbao/openbao}:${OPENBAO_TAG:?OPENBAO_TAG is required}
+    restart: unless-stopped
+    # The image's entrypoint expands this to `bao server -config=/openbao/config`.
+    command: server
+    environment:
+      # The address OpenBao advertises — in redirects, and to other nodes. It
+      # lives here rather than in openbao.hcl so the configuration file stays
+      # host-agnostic and never needs templating.
+      BAO_API_ADDR: ${BAO_API_ADDR:?BAO_API_ADDR is required}
+      # Raft refuses to start without a cluster address even as a single node.
+      # Nothing dials it in this topology, so loopback is correct.
+      BAO_CLUSTER_ADDR: ${BAO_CLUSTER_ADDR:-https://127.0.0.1:8201}
+      # So `docker compose exec openbao bao status` works with no arguments.
+      BAO_ADDR: http://127.0.0.1:8200
+    ports:
+      # Loopback by default: TLS is terminated by the reverse proxy on this
+      # host, and anything that can reach 8200 directly bypasses it.
+      - "${BIND_ADDRESS:-127.0.0.1}:${BAO_PORT:-8200}:8200"
+    volumes:
+      # Read-only: nothing OpenBao does should rewrite its own configuration.
+      - ./config:/openbao/config:ro
+      # The seal key is mounted separately from the configuration directory on
+      # purpose — OpenBao scans that directory for configuration files, and a
+      # secret has no business sitting in a scanned path.
+      - ./seal:/openbao/seal:ro
+      # Raft storage. A bind mount rather than a named volume, because it has
+      # to be writable by the uid inside the image (100) and Docker creates a
+      # named volume owned by root whenever the path does not exist in the
+      # image — which it does not here, so OpenBao fails to open its own
+      # database. A bind mount lets the ownership be set explicitly, and has
+      # the side benefit of putting the vault's data somewhere visible for
+      # backups instead of under /var/lib/docker.
+      - ./data:/openbao/data
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      # Exit status is 0 only when initialised and unsealed, which is exactly
+      # the condition callers care about. A sealed instance answers HTTP but
+      # cannot serve a single secret, so an HTTP 200 check would lie.
+      test: ["CMD", "bao", "status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# No named volumes: ./data holds the entire vault. Back it up with
+# `bao operator raft snapshot save`, and keep the snapshot and the seal key in
+# different places — either one alone is useless, which is the point.

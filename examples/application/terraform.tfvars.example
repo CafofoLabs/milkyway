@@ -1,0 +1,8 @@
+# Replace these non-secret examples with your consumer configuration.
+slug             = "example-app"
+name             = "Example App"
+identity_url     = "https://idp.example.test"
+vault_url        = "https://vault.example.test"
+launch_url       = "https://app.example.test"
+redirect_uris    = ["https://app.example.test/oidc/callback"]
+access_group_ids = ["00000000-0000-0000-0000-000000000001"]

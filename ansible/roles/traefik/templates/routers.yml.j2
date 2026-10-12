@@ -1,0 +1,78 @@
+#jinja2: trim_blocks: True, lstrip_blocks: True
+# Managed by Ansible — do not edit by hand.
+# Rendered from ansible/roles/traefik/templates/routers.yml.j2.
+#
+# There is no catch-all router on purpose. Traefik does not fall through to a
+# "first" router the way nginx falls through to its first server block: a
+# request whose Host matches no rule below simply matches nothing and is
+# answered with 404, and unknown SNI gets Traefik's own self-signed default
+# certificate. So the Host() rules here are already the whole allow-list, and
+# nothing behind this proxy can be reached under a hostname it does not serve.
+# That matters most for authentik, which happily builds an OIDC discovery
+# document from whatever Host header reaches it — see docs/reverse-proxy.md.
+http:
+  routers:
+{% for router in traefik_routers %}
+    {{ router.name }}:
+      rule: "Host(`{{ router.host }}`)"
+      entryPoints:
+        - websecure
+      service: {{ router.name }}
+      tls:
+        certResolver: le
+        domains:
+          - main: "{{ router.host }}"
+{% if router.block_paths | default([]) | length > 0 %}
+
+    # Paths this backend serves that must not be reachable through the proxy.
+    #
+    # A second, more specific router rather than a middleware on the first: a
+    # middleware runs for every request and would have to decide what to let
+    # through, whereas a router only ever matches what it names. The explicit
+    # priority is what makes "more specific" true — Traefik's default ordering
+    # is by rule length, which happens to give the right answer here and is not
+    # a thing to depend on.
+    #
+    # This exists because a service can have an endpoint that is safe on
+    # loopback and not safe published: OpenBao's unauthenticated metrics are
+    # the case it was written for. See host_vars/vault.yml.
+    {{ router.name }}-blocked:
+      rule: "Host(`{{ router.host }}`) && ({% for path in router.block_paths %}PathPrefix(`{{ path }}`){% if not loop.last %} || {% endif %}{% endfor %})"
+      priority: 1000
+      entryPoints:
+        - websecure
+      service: {{ router.name }}
+      middlewares:
+        - deny-external
+      tls:
+        certResolver: le
+        domains:
+          - main: "{{ router.host }}"
+{% endif %}
+{% endfor %}
+
+  services:
+{% for router in traefik_routers %}
+    {{ router.name }}:
+      loadBalancer:
+        servers:
+          - url: "{{ router.backend }}"
+        # Traefik's default, stated explicitly because turning it off breaks
+        # authentik in a way that is hard to trace: the issuer in every OIDC
+        # discovery document is built from this header.
+        passHostHeader: true
+{% endfor %}
+{% if traefik_routers | map(attribute='block_paths', default=[]) | map('length') | sum > 0 %}
+
+  middlewares:
+    # Refuses everything, which is what the blocked routers above attach.
+    #
+    # Traefik has no "deny" middleware, so this is an allow-list naming an
+    # address no proxied request can ever present: traffic reaches this
+    # entrypoint over Tailscale, so the client address is always in 100.64/10
+    # and never loopback. Every match is answered 403.
+    deny-external:
+      ipAllowList:
+        sourceRange:
+          - "127.0.0.1/32"
+{% endif %}

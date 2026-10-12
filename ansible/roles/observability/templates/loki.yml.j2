@@ -1,0 +1,92 @@
+#jinja2: trim_blocks: True, lstrip_blocks: True
+# Managed by Ansible — do not edit by hand.
+# Rendered from ansible/roles/observability/templates/loki.yml.j2.
+#
+# Single-binary Loki on local disk. Every distributed component runs in one
+# process, the ring is in memory, and chunks land on a filesystem — which is
+# the right shape for one host and would be the wrong shape for a cluster.
+#
+# `auth_enabled: false` does NOT mean no authentication in the sense that
+# matters. It means Loki does not read an X-Scope-OrgID tenant header and puts
+# everything in one tenant. The access control is that the port is published on
+# the tailnet address only. See docs/observability.md.
+
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  log_level: info
+  # Agents batch aggressively; the default 4 MB rejects a batch from a host
+  # that has been unreachable and is catching up.
+  grpc_server_max_recv_msg_size: 16777216
+  grpc_server_max_send_msg_size: 16777216
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+# TSDB with schema v13 — the current index format. This is the one setting here
+# that cannot be changed in place: a `from` date earlier than data already on
+# disk is refused at startup, and Loki will not read old chunks under a new
+# schema. To migrate, append a second entry with a future `from` date rather
+# than editing this one.
+schema_config:
+  configs:
+    - from: 2024-04-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  retention_period: {{ observability_logs_retention }}
+  # Reject anything older than a week. Without this, a host whose clock is
+  # wrong writes into the distant past, where nobody looks and retention never
+  # reclaims it.
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+  # The label set is what Loki indexes, and every distinct combination is a
+  # separate stream. These caps are what stops one misconfigured application
+  # from turning a log line into an index entry.
+  max_label_names_per_series: 20
+  max_global_streams_per_user: 10000
+  ingestion_rate_mb: 16
+  ingestion_burst_size_mb: 32
+  # Lets Grafana's log volume histogram work, and lets structured metadata
+  # through — which is how the agents attach detail that should be searchable
+  # but must not become part of the stream identity.
+  volume_enabled: true
+  allow_structured_metadata: true
+
+# Retention is only enforced if the compactor is the one doing it. Without
+# `retention_enabled`, `retention_period` above is silently advisory and the
+# disk fills.
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
+  compaction_interval: 10m
+
+ruler:
+  storage:
+    type: local
+    local:
+      directory: /loki/rules
+  rule_path: /loki/rules-temp
+  # Compose service name: from inside Loki's container, loopback is Loki.
+  alertmanager_url: http://alertmanager:9093
+  enable_api: true
+
+analytics:
+  reporting_enabled: false

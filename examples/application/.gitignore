@@ -1,0 +1,9 @@
+.env
+.env.*
+.terraform/
+.milkyway/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+!terraform.tfvars.example

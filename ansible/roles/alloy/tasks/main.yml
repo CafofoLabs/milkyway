@@ -1,0 +1,21 @@
+---
+# One switch, and then the role as it was.
+#
+# Split this way rather than by wrapping everything in a `when`, which is how
+# `libvirt_host` is organised too: main.yml decides, and the files it includes do
+# the work. Nothing in agent.yml changed when this was added.
+#
+# The default is on, so every host that was reporting before still is. See
+# `alloy_enabled` in defaults/main.yml for what turns it off and why.
+
+- name: Install and configure the monitoring agent
+  ansible.builtin.include_tasks: agent.yml
+  when: alloy_enabled | bool
+
+# Not merely "skip the install". A host that had the agent and should not have it
+# keeps running one until something removes it, and a flag that leaves the thing
+# it disables still running is a flag that lies — the sandboxes this was written
+# for were already burning 500 MiB each on an agent that could not reach anything.
+- name: Remove the monitoring agent
+  ansible.builtin.include_tasks: absent.yml
+  when: not alloy_enabled | bool

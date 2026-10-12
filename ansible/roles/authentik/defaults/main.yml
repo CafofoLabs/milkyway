@@ -1,0 +1,72 @@
+---
+# Where the stack lives on the target host.
+authentik_deploy_dir: /opt/milkyway/authentik
+
+# Pinned deliberately: authentik runs database migrations on start, so an
+# unpinned tag turns any `docker compose pull` into an unplanned upgrade.
+authentik_image: ghcr.io/goauthentik/server
+authentik_tag: "2026.5.6"
+authentik_pg_tag: "16-alpine"
+authentik_pg_max_connections: 200
+
+authentik_compose_project: authentik
+
+authentik_bind_address: "127.0.0.1"
+authentik_port_http: 9000
+authentik_port_https: 9443
+
+# Prometheus metrics. Always published on loopback regardless of
+# authentik_bind_address — the endpoint is unauthenticated, and it is on a
+# separate port so that the reverse proxy in front of the application can never
+# route to it. The monitoring agent on this host scrapes it locally.
+authentik_port_metrics: 9300
+
+authentik_log_level: info
+authentik_error_reporting: false
+authentik_disable_update_check: false
+
+authentik_bootstrap_email: admin@example.com
+
+# Optional; see inventories/production/group_vars/authentik.yml.
+authentik_trusted_proxy_cidrs: ""
+authentik_cookie_domain: ""
+authentik_email: {}
+
+# Generated secrets are cached here on the control node so re-runs are
+# idempotent and OpenTofu can reuse the same API token.
+authentik_secrets_dir: "{{ milkyway_secrets_dir }}"
+
+# How long to wait for the server to report ready. First boot has to run every
+# migration from an empty database, which is slow on small VMs.
+authentik_ready_retries: 60
+authentik_ready_delay: 10
+
+# Objects created by authentik's default blueprints. The OpenTofu module looks
+# these up instead of creating them, so deployment is not finished until they
+# all exist. Keep in step with the `data` blocks in
+# tofu/modules/authentik-baseline.
+authentik_required_flows:
+  - default-authentication-flow
+  - default-provider-authorization-implicit-consent
+  - default-provider-invalidation-flow
+
+authentik_required_scope_mappings:
+  - goauthentik.io/providers/oauth2/scope-openid
+  - goauthentik.io/providers/oauth2/scope-email
+  - goauthentik.io/providers/oauth2/scope-profile
+
+# Matches the module's `embedded_outpost_name` default.
+authentik_required_outpost: "authentik Embedded Outpost"
+
+# The brand the root modules adopt with an `import` block, and the account
+# created from AUTHENTIK_BOOTSTRAP_* on the first start.
+authentik_required_brand_domain: authentik-default
+authentik_required_admin_username: akadmin
+
+authentik_blueprint_retries: 40
+authentik_blueprint_delay: 15
+
+# Source checkout is independent of the consumer playbook location.
+milkyway_services_dir: "{{ role_path }}/../../../services"
+milkyway_tofu_workdir: "{{ platform_tofu_workdir }}"
+milkyway_secrets_dir: "{{ platform_secret_files_dir }}"

@@ -1,0 +1,59 @@
+---
+- name: Restrict vault seeding to the explicit bootstrap phase
+  ansible.builtin.assert:
+    that:
+      - platform_access_mode == 'bootstrap'
+      - platform_bao_addr is match('^https://')
+      - platform_bao_token_file | length > 0
+      - platform_bootstrap_secrets | length > 0
+
+- name: Validate declared external credential destinations
+  ansible.builtin.assert:
+    that:
+      - item.path in ['platform/tailscale/auth_key', 'platform/hostinger/api']
+      - item.field in ['key', 'token']
+      - item.file is match('^/')
+  loop: "{{ platform_bootstrap_secrets }}"
+
+- name: Refuse to seed an empty external credential
+  ansible.builtin.assert:
+    that: lookup('ansible.builtin.file', item.file) | trim | length > 0
+  loop: "{{ platform_bootstrap_secrets }}"
+  no_log: true
+
+- name: Inspect existing bootstrap secret versions without logging values
+  ansible.builtin.uri:
+    url: "{{ platform_bao_addr }}/v1/secret/data/{{ item.path }}"
+    headers:
+      X-Vault-Token: "{{ lookup('ansible.builtin.file', platform_bao_token_file) | trim }}"
+    return_content: true
+    status_code: [200, 404]
+    validate_certs: true
+  loop: "{{ platform_bootstrap_secrets }}"
+  register: platform_seed_current
+  delegate_to: localhost
+  become: false
+  no_log: true
+
+- name: Persist only new or changed external credentials in Bao
+  ansible.builtin.uri:
+    url: "{{ platform_bao_addr }}/v1/secret/data/{{ item.item.path }}"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ lookup('ansible.builtin.file', platform_bao_token_file) | trim }}"
+    body_format: json
+    body:
+      data: >-
+        {{ (item.json.data.data if item.status == 200 else {}) |
+           combine({item.item.field: lookup('ansible.builtin.file', item.item.file) | trim}) }}
+    status_code: 200
+    validate_certs: true
+  loop: "{{ platform_seed_current.results }}"
+  when: >-
+    item.status == 404 or
+    item.json.data.data.get(item.item.field, '') !=
+    lookup('ansible.builtin.file', item.item.file) | trim
+  delegate_to: localhost
+  become: false
+  changed_when: true
+  no_log: true
