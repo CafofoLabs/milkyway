@@ -16,4 +16,4 @@ proxmox_tls_installed_certificate: /etc/pve/local/pveproxy-ssl.pem
 proxmox_tls_ca_path: /etc/ssl/certs
 proxmox_tls_dns_secret_path: platform/hostinger/api
 proxmox_tls_dns_secret_field: token
-proxmox_tls_propagation_timeout: 300
+proxmox_tls_propagation_timeout: 1200

@@ -159,27 +159,20 @@
         msg: >-
           No certificate was issued within
           {{ traefik_cert_retries | int * traefik_cert_delay | int }}s.
-          Read the log below for which one this is — the message that matters
-          is the last "Unable to obtain ACME certificate" line.
-          .
-          "NXDOMAIN for _acme-challenge.<host>" from an AUTHORITATIVE
-          nameserver means the record was never written, or was written and
-          then destroyed by a concurrent challenge against the same zone. The
-          playbook runs one host at a time to prevent the latter; check nothing
-          else is issuing against {{ platform_domain | default('this zone') }}
-          at the same time.
-          .
-          The same error naming a RECURSIVE resolver (1.1.1.1, 8.8.8.8) means
-          acme_dns_resolvers is pointed at recursors, which cache the negative
-          answer for longer than lego waits. It must list the zone's
-          authoritative nameservers.
+          acme_dns_resolvers must contain recursive resolvers capable of
+          resolving parent zones and CNAME targets, rather than authoritative-only
+          nameservers. Lego discovers and checks authoritative servers itself.
+          A recursive NXDOMAIN may be cached until the zone's negative-cache TTL
+          expires; the Hostinger propagation timeout must exceed that interval.
+          An authoritative NXDOMAIN means the challenge record is not visible
+          there yet. Verify provider writes and avoid simultaneous ownership
+          of the same TXT record set by multiple issuers.
           .
           An authentication or 4xx error from the provider means the token is
           wrong or lacks access to the zone. "too many certificates" means the
           rate limit is spent — 5 duplicates per week per hostname — and
           acme_ca_server can be set to "staging" to keep working meanwhile.
           .
-          Traefik said:
           Inspect the protected service logs on the host; logs are not copied into automation output.
 
 - name: Verify production certificate trust and hostname

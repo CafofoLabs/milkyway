@@ -12,6 +12,6 @@ Environment=HOSTINGER_API_TOKEN_FILE=%d/hostinger_api_token
 Environment=HOSTINGER_PROPAGATION_TIMEOUT={{ proxmox_tls_propagation_timeout | int }}
 UnsetEnvironment=HOSTINGER_API_TOKEN LEGO_DEBUG_ACME_HTTP_CLIENT LEGO_DEBUG_DNS_API_HTTP_CLIENT
 ExecStart={{ proxmox_tls_script }}
-TimeoutStartSec=1800
+TimeoutStartSec=3600
 StandardOutput=journal
 StandardError=journal
