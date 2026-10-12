@@ -39,21 +39,17 @@
       `acme_email` must be a real address you can receive expiry warnings at.
       Got: {{ acme_email | default('<undefined>') }}
 
-- name: Assert the propagation check has authoritative nameservers
+- name: Assert the propagation check has recursive resolvers
   ansible.builtin.assert:
     quiet: true
     that:
       - acme_dns_resolvers | length > 0
     fail_msg: >-
-      `acme_dns_resolvers` is empty. It must list the authoritative
-      nameservers for {{ platform_domain | default('the zone') }} —
-      `dig +short NS {{ platform_domain | default('<zone>') }}` — as
-      host:port, comma separated.
-      There is no default because a public recursive resolver caches the
-      NXDOMAIN it gets for _acme-challenge.<host> before the record is written,
-      for the zone's SOA minimum. That is far longer than lego waits, and every
-      retry renews it, so issuance deadlocks in a way whose only symptom is
-      "time limit exceeded".
+      `acme_dns_resolvers` must list reachable recursive DNS resolvers as
+      host:port, comma separated. Lego also uses them for CNAME resolution
+      and zone discovery; authoritative-only zone nameservers are unsuitable.
+      Both recursive and authoritative propagation checks remain enabled.
+      Set the provider propagation timeout above the zone's negative-cache TTL.
 
 - name: Assert the CA server is one this role knows
   ansible.builtin.assert:

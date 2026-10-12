@@ -49,15 +49,10 @@ acme_ca_servers:
 acme_dns_provider: ""
 acme_dns_credentials: {}
 
-# Nameservers lego queries to confirm the challenge record has propagated.
-#
-# These must be the zone's own authoritative servers — `dig NS <zone>` — and
-# there is deliberately no default, because every plausible default is wrong.
-# A public recursive resolver asked for _acme-challenge.<host> before the
-# record exists caches that NXDOMAIN for the zone's SOA minimum, which is
-# typically ten times longer than lego is willing to wait; each retry then
-# re-poisons it, and issuance can never succeed. The host's own resolver is
-# Tailscale's MagicDNS, which is not authoritative either.
+# Recursive resolvers used for CNAME lookup, zone discovery and propagation.
+# Authoritative-only zone servers cannot resolve parent zones or external names.
+# Lego discovers authoritative servers itself and keeps both propagation checks.
+# Allow the provider timeout to exceed the zone's negative-cache TTL.
 acme_dns_resolvers: ""
 
 # Some provider APIs acknowledge a write before serving it. Waiting once is
@@ -67,7 +62,7 @@ acme_delay_before_checks: "15s"
 # How long to wait for the first certificate. DNS-01 issuance involves writing
 # a TXT record, waiting for it to propagate to public resolvers and then for
 # the CA to validate it, so this is minutes rather than seconds.
-traefik_cert_retries: 40
+traefik_cert_retries: 120
 traefik_cert_delay: 15
 
 # Source checkout is independent of the consumer playbook location.

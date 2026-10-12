@@ -198,6 +198,7 @@ def ansible_checks(directory: Path, environment: dict[str, str]) -> None:
             "ansible/roles/openbao/tests/test_restart_readiness.py",
             "ansible/roles/proxmox_tls/tests/test_tls.py",
             "ansible/roles/proxmox_guest_startup/tests/test_startup.py",
+            "ansible/roles/platform_credentials/tests/test_bootstrap_seed.py",
         ],
         cwd=ROOT,
         environment=environment,

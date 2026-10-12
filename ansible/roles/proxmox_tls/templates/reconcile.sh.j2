@@ -12,14 +12,30 @@ if [[ -z "${HOSTINGER_API_TOKEN_FILE:-}" || ! -r "$HOSTINGER_API_TOKEN_FILE" ]];
     echo 'The systemd DNS credential file is unavailable.' >&2
     exit 1
 fi
-# Debug/provider output can contain sensitive HTTP responses; retain only status.
-if ! {{ (proxmox_tls_binary_dir ~ '/lego') | quote }} run \
+# Never write raw provider responses: classify captured output in memory only.
+if acme_output=$({{ (proxmox_tls_binary_dir ~ '/lego') | quote }} run \
     --path {{ proxmox_tls_state_dir | quote }} \
     --email {{ acme_email | quote }} --accept-tos \
     --server {{ proxmox_tls_ca_servers[proxmox_tls_ca_environment] | quote }} \
     --domains {{ proxmox_tls_fqdn | quote }} --dns hostinger \
-    --dns.resolvers {{ acme_dns_resolvers | quote }} >/dev/null 2>&1; then
-    echo 'ACME issuance or renewal failed; the installed certificate was preserved.' >&2
+    --dns.resolvers {{ acme_dns_resolvers | quote }} 2>&1); then
+    unset acme_output
+else
+    case "$acme_output" in
+        *[Rr]ate[Ll]imited*|*429*|*"too many certificates"*|*"too many requests"*)
+            failure_label=acme-rate-limit ;;
+        *401*|*403*|*[Uu]nauthorized*|*[Ff]orbidden*)
+            failure_label=dns-provider-auth ;;
+        *[Pp]ropagation*|*NXDOMAIN*|*REFUSED*|*"time limit exceeded"*|*"no TXT record"*|*"could not find zone"*|*"nameserver"*)
+            failure_label=dns-propagation ;;
+        *"i/o timeout"*|*"context deadline exceeded"*|*"connection refused"*|*"network is unreachable"*|*"no such host"*|*"dial tcp"*|*"TLS handshake timeout"*)
+            failure_label=network ;;
+        *"urn:ietf:params:acme:error"*|*"invalid authorization"*)
+            failure_label=acme-rejected ;;
+        *) failure_label=unknown ;;
+    esac
+    unset acme_output
+    echo "ACME failure [$failure_label]; the installed certificate was preserved." >&2
     exit 1
 fi
 {% if proxmox_tls_ca_environment == 'production' %}

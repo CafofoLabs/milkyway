@@ -9,10 +9,12 @@ precedes OpenTofu VM provisioning.
 ## Inputs and execution
 
 The consumer supplies `proxmox_tls_fqdn`, `acme_email`, and
-`acme_dns_resolvers` (comma-separated authoritative nameservers with `:53`).
+`acme_dns_resolvers` (comma-separated recursive resolvers with `:53`, for example
+`1.1.1.1:53,1.0.0.1:53`).
 `acme_ca_server` selects `production` or `staging`; production is the default.
-For Hostinger, first confirm the zone's actual nameservers rather than
-assuming a resolver. The playbook is `ansible/playbooks/proxmox-tls.yml`, using
+Authoritative-only zone servers do not provide the recursive lookups needed
+for parent-zone discovery and CNAME resolution. Lego discovers authoritative
+servers itself; both recursive and authoritative checks remain enabled. The playbook is `ansible/playbooks/proxmox-tls.yml`, using
 the consumer's existing inventory and private variable files. Nimbus exposes
 this through `make host-tls` and its complete host setup command.
 
@@ -41,7 +43,8 @@ Credential resolution reuses `platform_credentials`:
 - Systemd `LoadCredential` provides the runtime file. Lego receives only its
   path through `HOSTINGER_API_TOKEN_FILE`; no secret appears in arguments,
   unit files, automation output, or reconciliation logs. Third-party command
-  output is suppressed because HTTP error payloads may contain sensitive data.
+  output is captured in memory only and discarded after selecting a fixed
+  failure label; HTTP error payloads are never written or logged.
 
 The local runtime copy is deliberate: renewal must survive Bao downtime and
 must work while Bao itself is being created. Operational reconfiguration
@@ -56,7 +59,10 @@ The root-only helper `/usr/local/libexec/milkyway-proxmox-tls` takes a local
 `flock`, then runs Lego's v5 `run` command. This command obtains a missing
 certificate and checks renewal for an existing one using ARI and lifetime-aware
 renewal timing. It never forces renewal merely because configuration is applied
-again. Both authoritative and resolver propagation checks remain enabled.
+again. Both authoritative and recursive propagation checks remain enabled.
+The Hostinger propagation timeout defaults to 1200 seconds, allowing a zone
+negative-cache TTL of 600 seconds to expire. The systemd service deadline is
+3600 seconds to also allow renewal jitter and certificate verification.
 
 Before installation, OpenSSL verifies the certificate chain, server purpose,
 hostname, and matching public key. If the installed certificate and the
@@ -83,7 +89,10 @@ multiple issuers must not concurrently manage the same TXT record set.
 
 Check `systemctl status milkyway-proxmox-tls.service` and
 `systemctl list-timers milkyway-proxmox-tls.timer` for sanitized status. The
-helper intentionally logs only fixed status messages. A failed timer leaves
+helper intentionally logs only fixed status messages and one of the failure
+labels `dns-provider-auth`, `dns-propagation`, `network`, `acme-rate-limit`,
+`acme-rejected`, or `unknown`. Classification is diagnostic guidance, not proof
+of the provider's root cause. Raw provider output is never persisted. A failed timer leaves
 the current certificate in service; fix DNS connectivity, token validity or
 issuance limits before the certificate expires, then rerun the consumer command.
 Recovery from lost ACME state can require fresh issuance and consume CA limits.
@@ -105,11 +114,14 @@ it does not publish the service itself.
 
 ## Sources and reuse
 
-This role reuses Jarvis's Traefik DNS-01 approach, authoritative resolver
-configuration, and MilkyWay's explicit bootstrap/Bao credential contract.
+This role reuses Jarvis's Traefik DNS-01 approach and MilkyWay's explicit
+bootstrap/Bao credential contract. Resolver configuration corrects Jarvis's
+authoritative-only assumption: the Lego option requires recursive resolvers.
 The dedicated native installation replaces the Docker assumption on hypervisors.
 
 - [Pinned Lego release](https://github.com/go-acme/lego/releases/tag/v5.5.2)
 - [Hostinger provider and file-based credentials](https://go-acme.github.io/lego/dns/hostinger/)
+- [Lego recursive-resolver option](https://github.com/go-acme/lego/blob/v5.5.2/cmd/internal/flags/flags.go)
+- [Lego propagation checks](https://github.com/go-acme/lego/blob/v5.5.2/challenge/dns01/dns_challenge_precheck.go)
 - [Lego v5 issuance and renewal](https://github.com/go-acme/lego/blob/v5.5.2/cmd/cmd_run.go)
 - [Let's Encrypt DNS-01](https://letsencrypt.org/docs/challenge-types/#dns-01-challenge)

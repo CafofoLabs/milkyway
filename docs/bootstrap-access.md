@@ -167,3 +167,5 @@ explicit host rules precede implicit management IPSet allowances. Live negative
 connection tests remain mandatory.
 
 The provisioning identity receives guest-agent audit and pool audit inside its dedicated pool, plus `SDN.Use` only on declared `/sdn/zones/localnetwork/<bridge>` paths. Guest execution remains on the trusted bootstrap SSH transport; no unrestricted guest-agent execution permission is granted to the provider. These permissions were checked against Mercury's installed Proxmox9.2 source before live provisioning.
+
+Bootstrap seeding explicitly reads `platform_bootstrap_bao_token_file`, independently of the operational token setting. Operational extra variables cannot override that selection. Once the external credentials are stored, normal service access uses the scoped operational identity.

@@ -129,7 +129,7 @@ class Reconciliation:
             },
             "proxmox_tls_ca_environment": "production",
             "proxmox_tls_fqdn": "node.example.test",
-            "acme_dns_resolvers": "ns1.example.test:53,ns2.example.test:53",
+            "acme_dns_resolvers": "1.1.1.1:53,1.0.0.1:53",
             "proxmox_tls_installed_certificate": str(self.installed),
             "proxmox_tls_ca_path": str(certificates / "ca"),
         }
@@ -159,7 +159,7 @@ root = pathlib.Path(os.environ["TLS_FIXTURE_ROOT"])
 with (root / "lego.calls").open("a") as output:
     output.write(json.dumps(sys.argv[1:]) + "\n")
 if os.environ.get("TLS_FIXTURE_ISSUE_FAILURE"):
-    print("opaque third-party response", file=sys.stderr)
+    print(os.environ.get("TLS_FIXTURE_FAILURE_OUTPUT", "opaque third-party response"), file=sys.stderr)
     sys.exit(1)
 """,
         )
@@ -313,4 +313,34 @@ def test_missing_opaque_credential_fails_before_issuance(reconcile):
     reconcile.token.unlink()
     assert reconcile.run().returncode != 0
     assert reconcile.calls("lego") == []
+    assert reconcile.calls("pvenode") == []
+
+
+@pytest.mark.parametrize(
+    ("diagnostic", "label"),
+    [
+        ("HTTP 403 Forbidden", "dns-provider-auth"),
+        ("time limit exceeded: propagation: NXDOMAIN", "dns-propagation"),
+        ("initial recursive nameserver: REFUSED", "dns-propagation"),
+        ("dial tcp: i/o timeout", "network"),
+        ("urn:ietf:params:acme:error:rateLimited HTTP 429", "acme-rate-limit"),
+        ("urn:ietf:params:acme:error:rejectedIdentifier", "acme-rejected"),
+        ("unexpected provider failure", "unknown"),
+    ],
+)
+def test_failure_classification_never_exposes_provider_output(
+    reconcile, diagnostic, label
+):
+    synthetic_private_marker = "SYNTHETIC_PRIVATE_RESPONSE_DO_NOT_EMIT"
+    result = reconcile.run(
+        TLS_FIXTURE_ISSUE_FAILURE="1",
+        TLS_FIXTURE_FAILURE_OUTPUT=f"{diagnostic} {synthetic_private_marker}",
+    )
+    assert result.returncode != 0
+    assert result.stderr == (
+        f"ACME failure [{label}]; the installed certificate was preserved.\n"
+    )
+    assert result.stdout == ""
+    assert synthetic_private_marker not in result.stderr
+    assert diagnostic not in result.stderr
     assert reconcile.calls("pvenode") == []
