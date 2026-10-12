@@ -31,3 +31,18 @@ host-lid: ## Persist ignore-on-close lid behavior; activate with a separate rebo
 .PHONY: infrastructure-check
 infrastructure-check: ## Validate infrastructure with locked tools, synthetic inventory and mocked providers
 	uv run --frozen --project tools/infrastructure python scripts/check_infrastructure.py
+
+MANIFEST ?= examples/service-accounts/inventory.yaml
+IDENTITY_CATALOG ?= examples/service-accounts/catalog.yaml
+IDENTITY_WORKSPACE ?= $(CURDIR)/.milkyway/identities
+IDENTITY_COMPONENT ?= application
+IDENTITY_RUN = uv run --frozen --project tools/infrastructure python scripts/service_identity.py
+.PHONY: identity-validate identity-plan identity-apply identity-verify
+identity-validate: ## Validate and authorize a versioned application identity YAML
+	$(IDENTITY_RUN) validate --catalog "$(IDENTITY_CATALOG)" --manifest "$(MANIFEST)" --component "$(IDENTITY_COMPONENT)"
+identity-plan: ## Save an encrypted identity plan and print resource actions only
+	$(IDENTITY_RUN) plan --catalog "$(IDENTITY_CATALOG)" --manifest "$(MANIFEST)" --component "$(IDENTITY_COMPONENT)" --workspace "$(IDENTITY_WORKSPACE)"
+identity-apply: ## Apply the exact saved identity plan and deliver private credentials
+	$(IDENTITY_RUN) apply --catalog "$(IDENTITY_CATALOG)" --manifest "$(MANIFEST)" --component "$(IDENTITY_COMPONENT)" --workspace "$(IDENTITY_WORKSPACE)"
+identity-verify: ## Verify convergence and actual machine secret permissions
+	$(IDENTITY_RUN) verify --catalog "$(IDENTITY_CATALOG)" --manifest "$(MANIFEST)" --component "$(IDENTITY_COMPONENT)" --workspace "$(IDENTITY_WORKSPACE)"

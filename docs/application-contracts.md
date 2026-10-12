@@ -54,3 +54,7 @@ Live acceptance uses two disposable app consumers: each reads a synthetic secret
 - [Authentik application and dashboard metadata](https://github.com/goauthentik/terraform-provider-authentik/blob/main/docs/resources/application.md)
 - [OpenBao AppRole authentication](https://openbao.org/docs/auth/approle/)
 - [OpenBao KV v2 API](https://openbao.org/api-docs/secret/kv/kv-v2/)
+
+Named YAML-declared service accounts now have a separate M2M/JWT contract; see
+[Application service identities](service-identities.md). It preserves this existing
+web OIDC/AppRole interface and does not introduce VM provisioning or database RBAC.

@@ -15,3 +15,6 @@ Run `make setup` to install development tools and hooks, then `make check`. See 
 - [Brand assets](docs/branding.md)
 
 [Basic services](docs/services.md) · [Application contracts](docs/application-contracts.md)
+
+Application service accounts can be declared through a versioned YAML contract;
+see [service identities](docs/service-identities.md).

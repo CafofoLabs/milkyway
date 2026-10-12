@@ -115,6 +115,39 @@ def tofu_checks(directory: Path, environment: dict[str, str]) -> None:
             f"  {source.name}: initialized, validated, mocked tests passed", flush=True
         )
 
+    for name in ("machine-identity", "service-accounts"):
+        module_name = (
+            "machine-identity"
+            if name == "machine-identity"
+            else "service-account-access"
+        )
+        root = directory / "examples" / name
+        root.mkdir(parents=True)
+        source = ROOT / "examples" / name / "main.tf"
+        (root / "main.tf").write_text(
+            source.read_text().replace(
+                "MODULE_SOURCE", str(directory / "modules" / module_name)
+            )
+        )
+        shutil.copy2(
+            source.with_name(".terraform.lock.hcl"), root / ".terraform.lock.hcl"
+        )
+        run(["tofu", "fmt", "-check", str(root)], cwd=ROOT, environment=environment)
+        run(
+            [
+                "tofu",
+                "init",
+                "-backend=false",
+                "-input=false",
+                "-no-color",
+                "-lockfile=readonly",
+            ],
+            cwd=root,
+            environment=environment,
+        )
+        run(["tofu", "validate", "-no-color"], cwd=root, environment=environment)
+        print(f"  {name}: encrypted execution root validated", flush=True)
+
 
 def ansible_checks(directory: Path, environment: dict[str, str]) -> None:
     for source in sorted((ROOT / "ansible").rglob("*.yml")):
