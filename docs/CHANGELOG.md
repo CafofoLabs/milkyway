@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.6.6
+
+### Documentation
+- **platform:** clarify module status and telemetry access ([#42](https://github.com/CafofoLabs/milkyway/pull/42))
 ## v0.6.5
 
 ### Fixes
