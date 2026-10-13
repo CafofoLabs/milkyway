@@ -1,0 +1,8 @@
+---
+- name: Configure a declared native Linux workload
+  hosts: platform_vms
+  become: true
+  gather_facts: true
+  roles:
+    - default_linux_vm
+    - hermes_agent

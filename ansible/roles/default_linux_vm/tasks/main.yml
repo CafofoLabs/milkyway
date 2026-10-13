@@ -1,0 +1,95 @@
+---
+- name: Require the Debian 13 VM base
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution == 'Debian'
+      - ansible_distribution_major_version == '13'
+      - inventory_hostname in groups.get('platform_vms', [])
+
+- name: Configure the private Linux baseline
+  ansible.builtin.include_role:
+    name: platform_baseline
+
+- name: Configure SSH certificate access
+  ansible.builtin.include_role:
+    name: ssh_access
+
+- name: Select the verified private transport
+  ansible.builtin.set_fact:
+    ansible_host: "{{ platform_tailnet_address }}"
+    ansible_ssh_common_args: ''
+
+- name: Reconnect through the private network
+  ansible.builtin.meta: reset_connection
+
+- name: Clear completed bootstrap rollback units
+  ansible.builtin.command:
+    argv: [systemctl, stop, milkyway-firewall-rollback.timer, milkyway-firewall-rollback.service]
+  changed_when: false
+  failed_when: false
+
+- name: Release completed bootstrap rollback units
+  ansible.builtin.command:
+    argv: [systemctl, reset-failed, milkyway-firewall-rollback.timer, milkyway-firewall-rollback.service]
+  changed_when: false
+  failed_when: false
+
+- name: Close temporary LAN administration
+  ansible.builtin.include_role:
+    name: host_firewall
+  vars:
+    host_firewall_cutover: true
+
+- name: Install native host telemetry
+  ansible.builtin.include_role:
+    name: alloy_native
+
+- name: Create the unprivileged workload identity account
+  ansible.builtin.user:
+    name: "{{ native_instance.software.user }}"
+    home: "/var/lib/{{ native_instance.software.user }}"
+    shell: /usr/sbin/nologin
+    create_home: true
+
+- name: Create protected identity and runtime directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.owner }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: /usr/local/lib/milkyway, owner: root, mode: '0755'}
+    - {path: '/var/lib/{{ native_instance.software.user }}', owner: '{{ native_instance.software.user }}', mode: '0700'}
+    - {path: '/var/lib/{{ native_instance.software.user }}/.milkyway', owner: '{{ native_instance.software.user }}', mode: '0700'}
+
+- name: Install shared identity and environment clients
+  ansible.builtin.copy:
+    src: "{{ milkyway_framework_dir }}/scripts/{{ item }}"
+    dest: "/usr/local/lib/milkyway/{{ item }}"
+    owner: root
+    group: root
+    mode: '0644'
+  loop: [secret_env.py, service_identity_runtime.py]
+  register: native_runtime_clients
+
+- name: Deliver only this workload's machine identity
+  vars:
+    delivered: "{{ lookup('ansible.builtin.file', native_deployment_file) | from_json }}"
+  ansible.builtin.copy:
+    content: "{{ {'connection': delivered.connection, 'accounts': {native_instance.account: delivered.accounts[native_instance.account]}} | to_json }}"
+    dest: "/var/lib/{{ native_instance.software.user }}/.milkyway/identity.json"
+    owner: "{{ native_instance.software.user }}"
+    group: "{{ native_instance.software.user }}"
+    mode: '0600'
+  no_log: true
+  register: native_runtime_identity
+
+- name: Deliver declarative workload environment bindings
+  ansible.builtin.copy:
+    content: "{{ {'env': native_instance.env, 'secret_env': native_instance.secret_env, 'account': native_instance.account} | to_json }}"
+    dest: "/var/lib/{{ native_instance.software.user }}/.milkyway/bindings.json"
+    owner: root
+    group: "{{ native_instance.software.user }}"
+    mode: '0640'
+  register: native_runtime_bindings
