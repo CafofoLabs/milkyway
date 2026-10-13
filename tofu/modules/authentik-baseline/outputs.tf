@@ -18,12 +18,11 @@ output "oauth2_endpoints" {
     even a plain URL. Consuming a discovery URL from there would silently taint
     every downstream output that mentions it.
 
-    Deriving these from the slug rather than reading them back off the provider
-    is safe: it is authentik's endpoint layout, and the module already relies on
-    it in `oauth2_applications`.
+    Derive URLs from the managed application's slug so consumers inherit its
+    creation dependency without deferring unrelated resources in their modules.
   EOT
   value = {
-    for k, app in var.oauth2_applications : k => {
+    for k, app in authentik_application.oauth2 : k => {
       name              = app.name
       slug              = app.slug
       issuer            = "${var.instance_url}/application/o/${app.slug}/"
