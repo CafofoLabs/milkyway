@@ -1,0 +1,4 @@
+version: 1
+name: default-linux-vm
+os: debian-13
+runtime: systemd

@@ -1,0 +1,135 @@
+---
+- name: Require an immutable Hermes template and isolated runtime identity
+  ansible.builtin.assert:
+    that:
+      - native_instance.software.runtime == 'systemd'
+      - native_instance.software.commit is match('^[a-f0-9]{40}$')
+      - native_instance.software.installer_sha256 is match('^[a-f0-9]{64}$')
+      - native_deployment_file | length > 0
+
+- name: Install native runtime prerequisites
+  ansible.builtin.apt:
+    name: [git, curl, tar, ca-certificates, build-essential, libatomic1, python3]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create private persistent application directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: hermes
+    group: hermes
+    mode: '0700'
+  loop: [/var/lib/hermes/.hermes]
+
+- name: Install the verified upstream source installer
+  ansible.builtin.get_url:
+    url: "https://raw.githubusercontent.com/NousResearch/hermes-agent/{{ native_instance.software.commit }}/scripts/install.sh"
+    checksum: "sha256:{{ native_instance.software.installer_sha256 }}"
+    dest: /var/lib/hermes/.milkyway/install.sh
+    owner: hermes
+    group: hermes
+    mode: '0700'
+
+- name: Inspect the accepted runtime installation receipt
+  ansible.builtin.stat:
+    path: "/var/lib/hermes/.milkyway/installed-{{ native_instance.software.commit }}-{{ native_instance.parameters.browser | bool | ternary('browser', 'minimal') }}"
+  register: hermes_installation
+
+- name: Install the pinned Hermes runtime without interactive configuration
+  become_user: hermes
+  ansible.builtin.command:
+    argv: "{{ ['bash', '/var/lib/hermes/.milkyway/install.sh', '--commit', native_instance.software.commit, '--non-interactive', '--skip-computer-use'] + (native_instance.parameters.browser | bool | ternary([], ['--skip-browser'])) }}"
+  environment:
+    HOME: /var/lib/hermes
+    HERMES_HOME: /var/lib/hermes/.hermes
+  when: not hermes_installation.stat.exists
+  no_log: true
+  notify: Restart native hermes
+
+- name: Install Chromium system dependencies when requested
+  ansible.builtin.apt:
+    name: [libnss3, libatk1.0-0t64, libatk-bridge2.0-0t64, libcups2t64, libdrm2, libxkbcommon0, libxcomposite1, libxdamage1, libxfixes3, libxrandr2, libgbm1, libasound2t64, libpango-1.0-0, libcairo2]
+    state: present
+  when: native_instance.parameters.browser | bool
+
+- name: Verify the installed source commit
+  become_user: hermes
+  ansible.builtin.command:
+    argv: [git, -C, /var/lib/hermes/.hermes/hermes-agent, rev-parse, HEAD]
+  register: hermes_installed_commit
+  changed_when: false
+
+- name: Enable the requested browser through the managed package installer
+  become_user: hermes
+  ansible.builtin.command:
+    argv: [/var/lib/hermes/.local/bin/hermes, pm, install, agent-browser]
+  environment:
+    HOME: /var/lib/hermes
+    HERMES_HOME: /var/lib/hermes/.hermes
+    PATH: /var/lib/hermes/.local/bin:/usr/local/bin:/usr/bin:/bin
+  when: native_instance.parameters.browser | bool and not hermes_installation.stat.exists
+  no_log: true
+
+- name: Reject runtime version drift
+  ansible.builtin.assert:
+    that: hermes_installed_commit.stdout == native_instance.software.commit
+
+- name: Record the completed installation
+  ansible.builtin.copy:
+    dest: "/var/lib/hermes/.milkyway/installed-{{ native_instance.software.commit }}-{{ native_instance.parameters.browser | bool | ternary('browser', 'minimal') }}"
+    content: "{{ native_instance.software.release }}\n"
+    owner: hermes
+    group: hermes
+    mode: '0600'
+
+- name: Configure the native agent
+  ansible.builtin.copy:
+    content: "{{ {'model': {'provider': native_instance.parameters.provider, 'default': native_instance.parameters.model}, 'terminal': {'backend': 'local'}, 'agent': {'disabled_toolsets': native_instance.parameters.browser | bool | ternary([], ['browser'])}} | to_nice_yaml }}"
+    dest: /var/lib/hermes/.hermes/config.yaml
+    owner: hermes
+    group: hermes
+    mode: '0600'
+  notify: Restart native hermes
+
+- name: Verify required credentials before enabling the agent
+  become_user: hermes
+  ansible.builtin.command:
+    argv: [python3, /usr/local/lib/milkyway/secret_env.py, --bindings, /var/lib/hermes/.milkyway/bindings.json, --credentials, /var/lib/hermes/.milkyway/identity.json, --check]
+  changed_when: false
+  no_log: true
+
+- name: Install the native service
+  ansible.builtin.template:
+    src: hermes-agent.service.j2
+    dest: /etc/systemd/system/hermes-agent.service
+    owner: root
+    group: root
+    mode: '0644'
+  register: hermes_service_definition
+  changed_when: >-
+    hermes_service_definition.changed or native_runtime_clients.changed or
+    native_runtime_identity.changed or native_runtime_bindings.changed
+  notify: Restart native hermes
+
+- name: Install an administrator launcher for interactive use
+  ansible.builtin.copy:
+    dest: /usr/local/bin/hermes-agent
+    owner: root
+    group: root
+    mode: '0755'
+    content: |
+      #!/bin/sh
+      set -eu
+      exec runuser -u hermes -- env HOME=/var/lib/hermes HERMES_HOME=/var/lib/hermes/.hermes PATH=/var/lib/hermes/.local/bin:/usr/local/bin:/usr/bin:/bin /usr/bin/python3 /usr/local/lib/milkyway/secret_env.py --bindings /var/lib/hermes/.milkyway/bindings.json --credentials /var/lib/hermes/.milkyway/identity.json -- /var/lib/hermes/.local/bin/hermes "$@"
+
+- name: Enable Hermes at boot
+  ansible.builtin.systemd_service:
+    name: hermes-agent
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Apply runtime changes
+  ansible.builtin.meta: flush_handlers
