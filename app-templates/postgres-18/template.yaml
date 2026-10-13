@@ -1,0 +1,23 @@
+version: 1
+name: postgres-18
+primary_service: postgres
+port: 5432
+immutable_parameters: [user, dba]
+parameters:
+  user:
+    type: string
+    default: postgres
+    pattern: '[a-z_][a-z0-9_]{0,62}'
+  dba:
+    type: boolean
+    default: true
+    enum: [true]
+  extensions:
+    type: array
+    default: []
+    item_pattern: '[a-z_][a-z0-9_]{0,62}'
+hooks:
+  prepare: prepare.py
+  configure: configure.py
+  verify: verify.py
+  verify_client: verify_client.py
