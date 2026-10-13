@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.10.0
+
+### Features
+- **vms:** add native Linux and Hermes Agent recipes ([#52](https://github.com/CafofoLabs/milkyway/pull/52))
 ## v0.9.0
 
 ### Features
