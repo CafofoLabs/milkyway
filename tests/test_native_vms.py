@@ -211,3 +211,63 @@ def test_invalid_sizes(field, value):
     document["vm"][field] = value
     with pytest.raises(ValueError):
         native_vms.compile_map(document, ROOT)
+
+
+def test_authentik_yaml_preserves_visibility_metadata_and_provider_settings():
+    settings = native_vms.authentik_configuration(
+        {
+            "name": "Research agent",
+            "slug": "research",
+            "group": "Agents",
+            "description": "Private research dashboard",
+            "publisher": "CafofoLabs",
+            "icon_url": "https://static.example.test/hermes.png",
+            "launch_url": "https://hermes.example.test/chat",
+            "show_in_library": False,
+            "open_in_new_tab": True,
+            "policy_engine_mode": "all",
+            "backchannel_providers": [12],
+            "access_groups": ["platform_admins", "platform_users"],
+            "provider": {
+                "name": "Research OIDC",
+                "sub_mode": "user_uuid",
+                "access_token_validity": "minutes=15",
+            },
+        },
+        "first",
+        "https://hermes.example.test",
+    )
+    assert settings["slug"] == "research"
+    assert settings["show_in_library"] is False
+    assert settings["provider"]["client_type"] == "public"
+    assert settings["provider"]["name"] == "Research OIDC"
+    assert settings["provider"]["access_token_validity"] == "minutes=15"
+    assert settings["backchannel_providers"] == [12]
+    assert settings["policy_engine_mode"] == "all"
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"show_in_library": "false"},
+        {"open_in_new_tab": 1},
+        {"policy_engine_mode": "invalid"},
+        {"access_groups": []},
+        {"access_groups": ["platform_admins", "platform_admins"]},
+        {"backchannel_providers": [True]},
+        {"backchannel_providers": [1, 1]},
+        {"launch_url": "https://user:password@example.test"},
+        {"icon_url": "http://example.test/icon.png"},
+        {"provider": {"client_secret": "synthetic"}},
+        {"provider": {"client_type": "confidential"}},
+        {"provider": {"grant_types": ["authorization_code", "implicit"]}},
+        {"provider": {"sub_mode": "invalid"}},
+        {"provider": {"access_token_validity": "seconds=0"}},
+        {"provider": {"authorization_flow_slug": "../flow"}},
+    ],
+)
+def test_authentik_configuration_rejects_ambiguous_or_incompatible_settings(settings):
+    with pytest.raises(ValueError):
+        native_vms.authentik_configuration(
+            settings, "first", "https://hermes.example.test"
+        )

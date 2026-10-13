@@ -21,19 +21,34 @@ resource "random_id" "oauth2_client_id" {
   byte_length = 16
 }
 
+data "authentik_flow" "oauth2_authorization" {
+  for_each = { for key, app in var.oauth2_applications : key => app if app.authorization_flow_slug != null }
+  slug     = each.value.authorization_flow_slug
+}
+
+data "authentik_flow" "oauth2_invalidation" {
+  for_each = { for key, app in var.oauth2_applications : key => app if app.invalidation_flow_slug != null }
+  slug     = each.value.invalidation_flow_slug
+}
+
+data "authentik_certificate_key_pair" "oauth2_signing" {
+  for_each = { for key, app in var.oauth2_applications : key => app if app.signing_key_name != null }
+  name     = each.value.signing_key_name
+}
+
 resource "authentik_provider_oauth2" "this" {
   for_each = var.oauth2_applications
 
-  name      = each.value.name
+  name      = coalesce(each.value.provider_name, each.value.name)
   client_id = random_id.oauth2_client_id[each.key].hex
 
   client_type = each.value.client_type
   sub_mode    = each.value.sub_mode
   grant_types = each.value.grant_types
-  signing_key = data.authentik_certificate_key_pair.signing.id
+  signing_key = each.value.signing_key_name == null ? data.authentik_certificate_key_pair.signing.id : data.authentik_certificate_key_pair.oauth2_signing[each.key].id
 
-  authorization_flow = data.authentik_flow.authorization.id
-  invalidation_flow  = data.authentik_flow.invalidation.id
+  authorization_flow = each.value.authorization_flow_slug == null ? data.authentik_flow.authorization.id : data.authentik_flow.oauth2_authorization[each.key].id
+  invalidation_flow  = each.value.invalidation_flow_slug == null ? data.authentik_flow.invalidation.id : data.authentik_flow.oauth2_invalidation[each.key].id
 
   property_mappings = data.authentik_property_mapping_provider_scope.oidc.ids
 
@@ -56,11 +71,15 @@ resource "authentik_application" "oauth2" {
   slug              = each.value.slug
   protocol_provider = authentik_provider_oauth2.this[each.key].id
 
-  meta_description = each.value.description
-  meta_launch_url  = each.value.launch_url
-  meta_icon        = each.value.icon_url
-  group            = each.value.group
-  open_in_new_tab  = each.value.open_in_new_tab
+  meta_description      = each.value.description
+  meta_launch_url       = each.value.launch_url
+  meta_icon             = each.value.icon_url
+  group                 = each.value.group
+  open_in_new_tab       = each.value.open_in_new_tab
+  meta_hide             = !each.value.show_in_library
+  meta_publisher        = each.value.publisher
+  policy_engine_mode    = each.value.policy_engine_mode
+  backchannel_providers = each.value.backchannel_providers
 }
 
 # Access control. Without a binding an application is visible to every
