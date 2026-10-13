@@ -119,6 +119,64 @@ def test_plaintext_provider_keys_and_conflicting_bindings_are_rejected():
         native_vms.compile_map(document, ROOT)
 
 
+def test_dashboard_requires_explicit_https_origins():
+    document = instance()
+    document["parameters"]["dashboard"] = True
+    with pytest.raises(ValueError, match="HTTPS"):
+        native_vms.compile_map(document, ROOT)
+    document["env"].update(
+        HERMES_DASHBOARD_PUBLIC_URL="https://hermes.example.test",
+        HERMES_DASHBOARD_OIDC_ISSUER="https://auth.example.test/application/o/hermes/",
+    )
+    assert native_vms.compile_map(document, ROOT)["parameters"]["dashboard"]
+    for value in (
+        "http://hermes.example.test",
+        "https://user:password@example.test",
+        "https://hermes.example.test?x=1",
+        "https://hermes.example.test/other",
+    ):
+        document["env"]["HERMES_DASHBOARD_PUBLIC_URL"] = value
+        with pytest.raises(ValueError):
+            native_vms.compile_map(document, ROOT)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_dashboard_configuration_does_not_require_oidc_values_when_disabled(enabled):
+    document = instance()
+    document["parameters"]["dashboard"] = enabled
+    if enabled:
+        document["env"].update(
+            HERMES_DASHBOARD_PUBLIC_URL="https://hermes.example.test",
+            HERMES_DASHBOARD_OIDC_ISSUER="https://auth.example.test/application/o/hermes/",
+        )
+    tasks = yaml.safe_load(
+        (ROOT / "ansible/roles/hermes_agent/tasks/main.yml").read_text()
+    )
+    content = next(
+        t["ansible.builtin.copy"]["content"]
+        for t in tasks
+        if t["name"] == "Configure the native agent"
+    )
+    engine = Environment()
+    engine.filters.update(
+        bool=bool,
+        ternary=lambda condition, yes, no: yes if condition else no,
+        combine=lambda a, b: a | b,
+        to_nice_yaml=yaml.safe_dump,
+    )
+    variables = {"native_instance": native_vms.compile_map(document, ROOT)}
+    if enabled:
+        variables.update(
+            native_dashboard_client_id="a" * 32,
+            native_dashboard_proxy_address="100.64.0.1",
+        )
+    configuration = yaml.safe_load(engine.from_string(content).render(**variables))
+    assert ("dashboard" in configuration) == enabled
+    if enabled:
+        assert configuration["dashboard"]["oauth"]["provider"] == "self-hosted"
+        assert configuration["dashboard"]["trusted_proxies"] == ["100.64.0.1"]
+
+
 def test_bindings_never_grant_their_own_authorization():
     configuration = load(ROOT / "examples/service-accounts/catalog.yaml")
     configuration["applications"] = {

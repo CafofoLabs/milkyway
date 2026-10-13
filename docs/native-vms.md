@@ -8,7 +8,9 @@ MilkyWay supplies a `default-linux-vm` base and a `hermes-agent` application rec
 
 `ansible/roles/default_linux_vm` configures the Debian baseline, private Tailscale access, SSH CA, firewall cutover and the existing checksum-pinned native Alloy collector. It installs the shared identity/secret clients and delivers an individual workload credential plus non-secret environment bindings. Workload users have no sudo privileges. Docker and Periphery are excluded.
 
-`app-templates/hermes-agent/template.yaml` composes that base. The initial native application runner supports Hermes: it installs the pinned source commit with the checksum-verified upstream installer, selects the provider/model, configures `terminal.backend: local` and supervises the gateway with systemd. Browser binaries and dependencies are opt-in. Without messaging adapters, the gateway runs for scheduled work. The recipe publishes no public API or web dashboard.
+`app-templates/hermes-agent/template.yaml` composes that base. The initial native application runner supports Hermes: it installs the pinned source commit with the checksum-verified upstream installer, selects the provider/model, configures `terminal.backend: local` and supervises the gateway with systemd. Browser binaries and dependencies are opt-in. Without messaging adapters, the gateway runs for scheduled work.
+
+Set `parameters.dashboard: true` to enable a separate native dashboard service on the verified tailnet address, port 9119. Declare HTTPS `HERMES_DASHBOARD_PUBLIC_URL` and `HERMES_DASHBOARD_OIDC_ISSUER` in `env`; the consumer must supply `native_dashboard_client_id` (a public PKCE client) and the exact private `native_dashboard_proxy_address`. Hermes enforces its own OIDC gate, including WebSockets. The consumer owns DNS, TLS routing and IdP group bindings. Runtime provider keys still come from Bao, never a dashboard service file. Disabling the option stops and disables the dashboard service.
 
 ## Maps and authorization
 
