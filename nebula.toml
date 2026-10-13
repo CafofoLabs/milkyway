@@ -18,7 +18,8 @@ commands = [
     "ruff",
     "check",
     "scripts",
-    "tests"
+    "tests",
+    "app-templates"
   ],
   [
     "uv",
@@ -30,7 +31,8 @@ commands = [
     "format",
     "--check",
     "scripts",
-    "tests"
+    "tests",
+    "app-templates"
   ],
   [
     "uv",
