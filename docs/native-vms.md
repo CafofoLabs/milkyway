@@ -14,7 +14,7 @@ Set `parameters.dashboard: true` to enable a separate native dashboard service o
 
 ## Maps and authorization
 
-`scripts/native_vms.py` compiles version-1 maps containing `name`, `template`, `environment`, `vm`, `parameters`, `env` and `secret_env`. VM identity includes an explicit `vm_id`; consumers check conflicts with existing guests and placement policy. Credential-shaped environment names require a structured reference:
+`scripts/native_vms.py` compiles version-1 maps containing `name`, `template`, `environment`, `vm`, `parameters`, `env`, `secret_env` and optional `authentik`. VM identity includes an explicit `vm_id`; consumers check conflicts with existing guests and placement policy. Credential-shaped environment names require a structured reference:
 
 ```yaml
 secret_env:
@@ -27,6 +27,44 @@ secret_env:
 Unknown fields, duplicate YAML keys, path traversal, wildcard paths and protected process-variable overrides fail validation. References never grant access themselves: the existing application identity validator checks them against the administrator-owned catalog. KV v2 permissions apply to the whole path, not individual fields.
 
 Accounts are named `svc-<application>-<environment>-<instance>`. Generated identity manifests aggregate all instances of an application/environment, preserving existing declared accounts when another is added. Each VM receives only its own account from the grouped deployment artifact. The shared M2M foundation must already be provisioned and verified. The recipe does not change human SSO or create provider secret values.
+
+## Declarative Authentik application
+
+Dashboard maps carry an `authentik` block. Consumers pass its normalized application and provider settings to `authentik-baseline`; Terraform contains no per-instance presentation or access defaults. Existing maps without the block keep their previous defaults for compatibility.
+
+```yaml
+authentik:
+  name: Hermes Callisto
+  slug: hermes-callisto
+  group: Infrastructure
+  description: ""
+  publisher: ""
+  icon_url: ""
+  launch_url: https://hermes.cafofolabs.cloud
+  show_in_library: true
+  open_in_new_tab: false
+  policy_engine_mode: any
+  backchannel_providers: []
+  access_groups: [platform_admins]
+  provider:
+    name: Hermes Callisto
+    client_type: public
+    sub_mode: hashed_user_id
+    grant_types: [authorization_code, refresh_token]
+    access_token_validity: hours=1
+    refresh_token_validity: days=30
+    authorization_flow_slug: default-provider-authorization-implicit-consent
+    invalidation_flow_slug: default-provider-invalidation-flow
+    signing_key_name: authentik Self-signed Certificate
+```
+
+`show_in_library: false` sets Authentik's `meta_hide` flag. It hides the card without removing the provider or disabling OIDC. `group` is the application's visual category; `access_groups` are nonempty references to trusted consumer group keys, not display names. `policy_engine_mode` accepts `any` or `all`. Backchannel provider IDs reference providers that already exist; this recipe does not create external sync services.
+
+The `provider` block supports its display name, subject mode, authorization/refresh grants, token validity, and existing authorization-flow, invalidation-flow and signing-certificate names. Omitted flow/certificate references inherit the baseline module's defaults. Hermes requires a public authorization-code/PKCE client; confidential, implicit, password and machine-to-machine grants are rejected. Its strict callback is derived from the dashboard origin. Generated client IDs and credentials remain owned by Terraform and protected delivery.
+
+A custom application slug must match the declared OIDC issuer. Consumers keep stable Terraform resource keys independently of presentation slugs. They must validate reserved names, unique slugs, trusted groups, and the saved plan before applying. Removing access bindings or applications remains subject to their explicit removal safeguards.
+
+See [Authentik application visibility](https://docs.goauthentik.io/add-secure-apps/applications/manage_apps/) and the [pinned provider application schema](https://github.com/goauthentik/terraform-provider-authentik/blob/v2026.5.2/docs/resources/application.md).
 
 ## Runtime and rotation
 

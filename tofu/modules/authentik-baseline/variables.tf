@@ -42,13 +42,21 @@ variable "oauth2_applications" {
     empty means every authenticated user has access.
   EOT
   type = map(object({
-    name            = string
-    slug            = string
-    description     = optional(string, "")
-    launch_url      = optional(string)
-    icon_url        = optional(string)
-    group           = optional(string, "")
-    open_in_new_tab = optional(bool, false)
+    name                    = string
+    slug                    = string
+    description             = optional(string, "")
+    launch_url              = optional(string)
+    icon_url                = optional(string)
+    group                   = optional(string, "")
+    open_in_new_tab         = optional(bool, false)
+    show_in_library         = optional(bool, true)
+    publisher               = optional(string, "")
+    policy_engine_mode      = optional(string, "any")
+    backchannel_providers   = optional(list(number), [])
+    provider_name           = optional(string)
+    authorization_flow_slug = optional(string)
+    invalidation_flow_slug  = optional(string)
+    signing_key_name        = optional(string)
 
     redirect_uris = list(object({
       matching_mode = optional(string, "strict") # "strict" or "regex"
