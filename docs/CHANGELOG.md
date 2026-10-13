@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.9.0
+
+### Features
+- **apps:** add reusable PostgreSQL 18 templates ([#50](https://github.com/CafofoLabs/milkyway/pull/50))
 ## v0.8.0
 
 ### Features
