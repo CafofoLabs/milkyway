@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.11.0
+
+### Features
+- **hermes:** add a native OIDC dashboard service ([#54](https://github.com/CafofoLabs/milkyway/pull/54))
 ## v0.10.0
 
 ### Features
