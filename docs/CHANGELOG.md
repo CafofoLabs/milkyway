@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.12.0
+
+### Features
+- **vms:** declare Authentik application settings in native maps ([#58](https://github.com/CafofoLabs/milkyway/pull/58))
 ## v0.11.1
 
 ### Fixes
