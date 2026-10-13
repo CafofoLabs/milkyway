@@ -4,3 +4,10 @@
     name: hermes-agent
     state: restarted
     daemon_reload: true
+
+- name: Restart native dashboard
+  ansible.builtin.systemd_service:
+    name: hermes-dashboard
+    state: restarted
+    daemon_reload: true
+  when: native_instance.parameters.dashboard | default(false)

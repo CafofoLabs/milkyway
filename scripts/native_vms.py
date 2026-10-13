@@ -2,6 +2,7 @@
 
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from service_identity import catalog, compile_contract, fields, load, name, read_rule
 
@@ -135,7 +136,9 @@ def compile_map(document, framework):
     if env.keys() & secrets.keys():
         raise ValueError("An environment name cannot have two sources")
     parameters = fields(
-        document.get("parameters", {}), (), ("provider", "model", "browser")
+        document.get("parameters", {}),
+        (),
+        ("provider", "model", "browser", "dashboard"),
     )
     if not isinstance(parameters.get("provider"), str) or not re.fullmatch(
         r"[a-z][a-z0-9_-]*", parameters["provider"]
@@ -149,6 +152,26 @@ def compile_map(document, framework):
         raise ValueError("Select an explicit model")
     if type(parameters.get("browser", False)) is not bool:
         raise ValueError("browser must be boolean")
+    if type(parameters.get("dashboard", False)) is not bool:
+        raise ValueError("dashboard must be boolean")
+    if parameters.get("dashboard"):
+        for key in ("HERMES_DASHBOARD_PUBLIC_URL", "HERMES_DASHBOARD_OIDC_ISSUER"):
+            value = env.get(key, "")
+            parsed = urlsplit(value)
+            if (
+                parsed.scheme != "https"
+                or not parsed.hostname
+                or parsed.username
+                or parsed.password
+                or parsed.query
+                or parsed.fragment
+                or any(c.isspace() or c in '"<>\\' for c in value)
+            ):
+                raise ValueError(
+                    "Dashboard access requires explicit trusted HTTPS origins"
+                )
+        if urlsplit(env["HERMES_DASHBOARD_PUBLIC_URL"]).path not in ("", "/"):
+            raise ValueError("The native dashboard must use a dedicated hostname")
     if not secrets:
         raise ValueError("Declare the required provider credential references")
     required_key = {
@@ -164,7 +187,7 @@ def compile_map(document, framework):
         **document,
         "env": env,
         "secret_env": secrets,
-        "parameters": {"browser": False, **parameters},
+        "parameters": {"browser": False, "dashboard": False, **parameters},
         "credential_revision": revision,
         "application": template["application"],
         "account": f"svc-{template['application']}-{environment}-{instance}",

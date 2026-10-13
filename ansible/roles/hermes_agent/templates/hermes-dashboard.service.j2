@@ -1,0 +1,27 @@
+[Unit]
+Description=Authenticated Hermes Dashboard
+Wants=network-online.target
+After=network-online.target tailscaled.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=hermes
+Group=hermes
+WorkingDirectory=/var/lib/hermes
+Environment=HOME=/var/lib/hermes
+Environment=HERMES_HOME=/var/lib/hermes/.hermes
+Environment=PATH=/var/lib/hermes/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/python3 /usr/local/lib/milkyway/secret_env.py --bindings /var/lib/hermes/.milkyway/bindings.json --credentials /var/lib/hermes/.milkyway/identity.json -- /var/lib/hermes/.local/bin/hermes dashboard --host {{ platform_tailnet_address }} --port 9119 --no-open
+Restart=always
+RestartSec=30
+RestartPreventExitStatus=78
+KillMode=mixed
+TimeoutStopSec=120
+UMask=0077
+NoNewPrivileges=true
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target
