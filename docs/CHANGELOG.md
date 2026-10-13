@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.11.1
+
+### Fixes
+- **oidc:** carry application dependencies through endpoint outputs ([#56](https://github.com/CafofoLabs/milkyway/pull/56))
 ## v0.11.0
 
 ### Features
