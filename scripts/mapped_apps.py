@@ -1,11 +1,14 @@
 """Validate instance maps and render shared or consumer-local application templates."""
 
+import hashlib
 import json
 import re
 from pathlib import Path
 
 import yaml
 from jinja2 import Environment, StrictUndefined
+from service_identity import catalog, compile_contract, fields, read_rule
+from service_identity import name as identity_name
 
 NAME = r"[a-z][a-z0-9-]{0,47}"
 TAILSCALE_IMAGE = "tailscale/tailscale:stable@sha256:c507f3a2a6ab1cabd8d809b98edeb41edbd5c3fb6ad9632ffd098b4c7d0b4065"
@@ -100,6 +103,8 @@ def render(request, framework, local_templates):
             "parameters",
             "tailscale",
             "local_port",
+            "config_ref",
+            "identity",
         ),
         "map",
     )
@@ -130,6 +135,9 @@ def render(request, framework, local_templates):
             "parameters",
             "immutable_parameters",
             "hooks",
+            "files",
+            "runtime_config",
+            "tailscale_https",
         ),
         "template",
     )
@@ -138,6 +146,36 @@ def render(request, framework, local_templates):
     parameters = parameters_for(
         request.get("parameters", {}), template.get("parameters", {})
     )
+    runtime = None
+    if type(template.get("runtime_config", False)) is not bool:
+        raise TypeError("runtime_config must be boolean")
+    if template.get("runtime_config", False):
+        reference_config = fields(
+            request.get("config_ref"), ("mount", "path", "version")
+        )
+        read_rule({key: reference_config[key] for key in ("mount", "path")})
+        if (
+            type(reference_config["version"]) is not int
+            or reference_config["version"] < 1
+        ):
+            raise ValueError("Pin a positive KV v2 config version")
+        identity = fields(
+            request.get("identity"),
+            ("application", "environment", "account"),
+            ("credential_revision",),
+        )
+        for key in ("application", "environment"):
+            identity_name(identity[key])
+        revision = identity.get("credential_revision", 1)
+        if type(revision) is not int or revision < 1:
+            raise ValueError("Credential revision must be a positive integer")
+        runtime = {
+            **identity,
+            "credential_revision": revision,
+            "config_ref": reference_config,
+        }
+    elif "config_ref" in request or "identity" in request:
+        raise ValueError("This template does not accept runtime configuration")
     tailscale = request.get("tailscale", {})
     only(tailscale, ("hostname", "ephemeral"), "Tailscale")
     hostname = identifier(tailscale.get("hostname", name), "Tailscale hostname")
@@ -243,6 +281,39 @@ def render(request, framework, local_templates):
     hooks = template.get("hooks", {})
     only(hooks, ("prepare", "configure", "verify", "verify_client"), "hook")
     files = {filename: str(file_in(directory, filename)) for filename in hooks.values()}
+    assets = template.get("files", [])
+    if not isinstance(assets, list):
+        raise TypeError("Template files must be a list")
+    files.update({filename: str(file_in(directory, filename)) for filename in assets})
+    if runtime:
+        files["service_identity_runtime.py"] = str(
+            framework / "scripts/service_identity_runtime.py"
+        )
+        build_revision = hashlib.sha256(
+            b"".join(Path(files[key]).read_bytes() for key in sorted(files))
+        ).hexdigest()[:16]
+        services[primary]["image"] += "-" + build_revision
+        services[primary]["pull_policy"] = "build"
+        services[primary].setdefault("environment", {}).update(
+            {
+                "MCP_CONFIG_VERSION": str(runtime["config_ref"]["version"]),
+                "MCP_CREDENTIAL_REVISION": str(runtime["credential_revision"]),
+            }
+        )
+    https = template.get("tailscale_https", False)
+    if type(https) is not bool:
+        raise ValueError("tailscale_https must be boolean")
+    serve = {"TCP": {str(port): {"TCPForward": f"{primary}:{port}"}}}
+    if https:
+        serve = {
+            "TCP": {"443": {"HTTPS": True}},
+            "Web": {
+                "${TS_CERT_DOMAIN}:443": {
+                    "Handlers": {"/": {"Proxy": f"http://{primary}:{port}"}}
+                }
+            },
+            "AllowFunnel": {"${TS_CERT_DOMAIN}:443": False},
+        }
     return {
         **context,
         "template": reference,
@@ -250,6 +321,8 @@ def render(request, framework, local_templates):
         "services": list(services),
         "port": port,
         "local_port": local_port,
+        "tailnet_port": 443 if https else port,
+        "runtime": runtime,
         "tailscale": {"hostname": hostname, "ephemeral": ephemeral},
         "tailscale_secret": "platform/tailscale/ephemeral"
         if ephemeral
@@ -259,10 +332,7 @@ def render(request, framework, local_templates):
         "immutable_parameters": template.get("immutable_parameters", []),
         "files": files,
         "compose": yaml.safe_dump(compose, sort_keys=False),
-        "serve_config": json.dumps(
-            {"TCP": {str(port): {"TCPForward": f"{primary}:{port}"}}}, indent=2
-        )
-        + "\n",
+        "serve_config": json.dumps(serve, indent=2) + "\n",
         "config": {
             "project_name": name,
             "files_on_host": True,
@@ -272,6 +342,7 @@ def render(request, framework, local_templates):
             "additional_env_files": [],
             "auto_update": False,
             "destroy_before_deploy": False,
+            **({"run_build": True, "auto_pull": False} if runtime else {}),
         },
     }
 
@@ -299,3 +370,40 @@ def discover(maps, framework, local_templates):
     if not result:
         raise ValueError("No application maps found")
     return result
+
+
+def manifests(apps):
+    """Group accounts without granting access outside their exact bundle paths."""
+    grouped = {}
+    for app in apps:
+        runtime = app.get("runtime")
+        if not runtime:
+            continue
+        key = (runtime["application"], runtime["environment"])
+        manifest = grouped.setdefault(
+            key,
+            {
+                "version": 1,
+                "application": key[0],
+                "environment": key[1],
+                "serviceAccounts": [],
+            },
+        )
+        reference = runtime["config_ref"]
+        manifest["serviceAccounts"].append(
+            {
+                "name": runtime["account"],
+                "roles": ["application-service"],
+                "credentialRevision": runtime["credential_revision"],
+                "secrets": {
+                    "read": [{"mount": reference["mount"], "path": reference["path"]}]
+                },
+            }
+        )
+    return grouped
+
+
+def authorize(apps, catalog_path):
+    trusted = catalog(read_yaml(catalog_path))
+    for manifest in manifests(apps).values():
+        compile_contract(manifest, trusted)

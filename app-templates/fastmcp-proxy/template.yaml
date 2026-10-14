@@ -1,0 +1,12 @@
+version: 1
+name: fastmcp-proxy
+primary_service: proxy
+port: 8000
+runtime_config: true
+tailscale_https: true
+parameters: {}
+immutable_parameters: []
+files: [Dockerfile, .dockerignore, requirements.txt, proxy.py]
+hooks:
+  verify: verify.py
+  verify_client: verify_client.py
