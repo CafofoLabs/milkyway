@@ -8,6 +8,7 @@ import ipaddress
 import json
 import logging
 import re
+from copy import deepcopy
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 from urllib.request import Request, build_opener, urlopen
@@ -239,14 +240,20 @@ class Policy(Middleware):
 
     async def on_list_tools(self, context, call_next):
         tools = await call_next(context)
-        return [
-            tool
-            for tool in tools
-            if tool.name in self.tools
-            and (
-                not self.cloud_id or "cloudId" in tool.parameters.get("properties", {})
-            )
-        ]
+        allowed = []
+        for tool in tools:
+            if tool.name not in self.tools:
+                continue
+            if self.cloud_id:
+                if "cloudId" not in tool.parameters.get("properties", {}):
+                    continue
+                schema = deepcopy(tool.parameters)
+                schema["properties"]["cloudId"].update(
+                    const=self.cloud_id, enum=[self.cloud_id], default=self.cloud_id
+                )
+                tool = tool.model_copy(update={"parameters": schema})
+            allowed.append(tool)
+        return allowed
 
     async def on_call_tool(self, context, call_next):
         tool = context.message.name

@@ -114,7 +114,11 @@ async def test_proxy_lists_and_calls_only_allowed_tools_in_one_cloud(capsys):
 
     server = proxy.create_server(proxy.validate_config(bundle(), "mcp-human"), upstream)
     async with Client(server) as client:
-        assert [tool.name for tool in await client.list_tools()] == ["get_issue"]
+        tools = await client.list_tools()
+        assert [tool.name for tool in tools] == ["get_issue"]
+        schema = tools[0].input_schema
+        assert schema["properties"]["cloudId"]["const"] == "human"
+        assert schema["properties"]["cloudId"]["enum"] == ["human"]
         assert (
             "synthetic issue"
             in (await client.call_tool("get_issue", {"cloudId": "human"}))

@@ -73,7 +73,9 @@ allow only authorized agent nodes to reach the instance's TCP 443.
 
 Every tool call is checked against the exact allowlist. With `cloud_id`, tools
 without a `cloudId` schema field are hidden and calls must provide that exact
-value. This does not restrict Jira projects or Confluence spaces inside the
+value. The public tool schema advertises that site's ID as a constant and default,
+so agents discover the required non-secret value without extra client settings.
+This does not restrict Jira projects or Confluence spaces inside the
 allowed site; apply account permissions for those boundaries. Resources, prompts,
 tasks, roots, sampling and elicitation forwarding are disabled. Caller headers
 are never forwarded upstream, TLS verification remains enabled, and redirects
