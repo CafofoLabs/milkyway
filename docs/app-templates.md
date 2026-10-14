@@ -64,11 +64,20 @@ discovers all containers and forwards stdout/stderr to Loki with `host`, `stack`
 and `service` labels. Apps that log only to private files must also emit stdout
 or stderr; Docker cannot collect those files.
 
+## Remote MCP
+
+The [FastMCP proxy](fastmcp-proxy.md) uses the same mapping lifecycle, with a
+pinned Bao configuration reference and one scoped workload identity per instance.
+It exposes HTTPS on tailnet port 443 through Tailscale Serve instead of raw TCP.
+
 ## Adding templates
 
 Create `app-templates/<name>/template.yaml` and `compose.yaml.j2`. The descriptor
 contains `version: 1`, `name`, `primary_service`, `port`, `parameters`, and optional
-`hooks`. Parameter types are `string`, `boolean`, `integer`, and `array`, with
+`hooks`, `files`, `runtime_config` and `tailscale_https`. `files` lists immediate
+template assets staged alongside hooks. A runtime-config template requires
+`config_ref` and `identity` in its instance map and catalog authorization.
+Parameter types are `string`, `boolean`, `integer`, and `array`, with
 `default`, `enum`, `pattern`, and `item_pattern` validation. Parameters without a
 default are required. Jinja receives `name`, `worker`, and `parameters`.
 
@@ -81,7 +90,7 @@ They receive `MAPPED_APP_NAME`, `MAPPED_APP_WORKER`, and JSON
 `changed=true` only when state changes. Verification must not modify the app.
 Hooks are trusted IaC and must never return credential values.
 The optional client hook runs on the control node with `MAPPED_APP_PARAMETERS`,
-`MAPPED_APP_TAILSCALE_IP`, and `MAPPED_APP_PORT`. PostgreSQL uses it to require a
+`MAPPED_APP_TAILSCALE_IP`, `MAPPED_APP_TAILSCALE_DNS` and `MAPPED_APP_PORT`. PostgreSQL uses it to require a
 real SCRAM authentication challenge through the full tailnet TCP forwarding path.
 `immutable_parameters` lists initialization parameters that cannot change on an
 existing instance. PostgreSQL uses this for its user and DBA setting.

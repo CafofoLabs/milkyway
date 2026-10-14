@@ -79,6 +79,127 @@ def test_local_template_has_the_same_contract(tmp_path):
     assert "POSTGRES_USER: thiago" in app["compose"]
 
 
+def mcp_request(name="mcp-human", **extra):
+    return {
+        "version": 1,
+        "name": name,
+        "template": "milkyway/fastmcp-proxy",
+        "local_port": 8101,
+        "config_ref": {
+            "mount": "secret",
+            "path": "apps/mcp/human/atlassian",
+            "version": 1,
+        },
+        "identity": {
+            "application": "mcp-human",
+            "environment": "prod",
+            "account": "svc-mcp-human-prod",
+        },
+        **extra,
+    }
+
+
+def test_mcp_bundle_is_not_resolved_and_tls_stays_tailnet_only(tmp_path):
+    app = library.render(mcp_request(), ROOT, tmp_path)
+    compose = yaml.safe_load(app["compose"])
+    service = compose["services"]["proxy"]
+    assert service["user"] == "10001:10001"
+    assert service["read_only"] is True
+    assert service["ports"] == ["127.0.0.1:8101:8000"]
+    assert app["tailnet_port"] == 443
+    assert app["config"]["run_build"] is True
+    assert app["config"]["auto_pull"] is False
+    serve = json.loads(app["serve_config"])
+    assert serve["TCP"] == {"443": {"HTTPS": True}}
+    assert serve["AllowFunnel"] == {"${TS_CERT_DOMAIN}:443": False}
+    assert "service_identity_runtime.py" in app["files"]
+    assert "api_key" not in app["compose"]
+    subprocess.run(
+        ["docker", "compose", "-f", "-", "config", "--quiet"],
+        input=app["compose"],
+        text=True,
+        check=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {
+            "config_ref": {
+                "mount": "secret",
+                "path": "apps/mcp/human",
+                "version": "latest",
+            }
+        },
+        {"config_ref": {"mount": "secret", "path": "apps/mcp/human", "version": 0}},
+        {"config_ref": {"mount": "secret", "path": "../escape", "version": 1}},
+        {
+            "identity": {
+                "application": "mcp-human",
+                "environment": "prod",
+                "account": "svc-mcp-human-prod",
+                "credential_revision": False,
+            }
+        },
+        {
+            "config_ref": {
+                "mount": "secret",
+                "path": "apps/mcp/human",
+                "version": 1,
+                "api_key": "synthetic",
+            }
+        },
+    ],
+)
+def test_invalid_runtime_binding_fails_before_remote_mutation(extra, tmp_path):
+    with pytest.raises(ValueError):
+        library.render(mcp_request(**extra), ROOT, tmp_path)
+
+
+def test_bundle_rotation_changes_compose_without_changing_image_or_identity(tmp_path):
+    first = library.render(mcp_request(), ROOT, tmp_path)
+    second = library.render(
+        mcp_request(
+            config_ref={
+                "mount": "secret",
+                "path": "apps/mcp/human/atlassian",
+                "version": 2,
+            }
+        ),
+        ROOT,
+        tmp_path,
+    )
+    one, two = [
+        yaml.safe_load(app["compose"])["services"]["proxy"] for app in (first, second)
+    ]
+    assert one["image"] == two["image"]
+    assert one["environment"]["MCP_CONFIG_VERSION"] == "1"
+    assert two["environment"]["MCP_CONFIG_VERSION"] == "2"
+    assert one != two
+
+
+def test_catalog_rejects_another_company_bundle(tmp_path):
+    catalog = yaml.safe_load(
+        (ROOT / "examples/service-accounts/catalog.yaml").read_text()
+    )
+    catalog["applications"] = {
+        "mcp-human": {
+            "prod": {
+                "roles": ["application-service"],
+                "secrets": [{"mount": "secret", "path": "apps/mcp/human/atlassian"}],
+            }
+        }
+    }
+    catalog_path = tmp_path / "catalog.yaml"
+    catalog_path.write_text(yaml.safe_dump(catalog))
+    app = library.render(mcp_request(), ROOT, tmp_path)
+    library.authorize([app], catalog_path)
+    app["runtime"]["config_ref"]["path"] = "apps/mcp/coates/atlassian"
+    with pytest.raises(ValueError, match="not authorized"):
+        library.authorize([app], catalog_path)
+
+
 @pytest.mark.parametrize(
     "extra",
     [

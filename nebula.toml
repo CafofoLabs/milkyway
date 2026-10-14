@@ -9,6 +9,7 @@ author_email = "thiago@thir.info"
 
 [checks]
 commands = [
+  ["uv", "run", "--frozen", "--project", "app-templates/fastmcp-proxy", "pytest", "app-templates/fastmcp-proxy/tests"],
   [
     "uv",
     "run",
