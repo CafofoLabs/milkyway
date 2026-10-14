@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.13.0
+
+### Features
+- **mcp:** add scoped remote proxy template ([#60](https://github.com/CafofoLabs/milkyway/pull/60))
 ## v0.12.0
 
 ### Features
