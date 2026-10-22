@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.14.0
+
+### Features
+- support scoped service references in mapped identities ([#62](https://github.com/CafofoLabs/milkyway/pull/62))
 ## v0.13.0
 
 ### Features
