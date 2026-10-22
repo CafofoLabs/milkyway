@@ -97,3 +97,19 @@ existing instance. PostgreSQL uses this for its user and DBA setting.
 
 Template updates require library tests, Compose validation and normal release
 checks before a consumer updates its pin.
+
+
+## Service references and prebuilt runtime images
+
+Runtime maps may use an immutable prebuilt image without a build section. Build
+suffixes and the `build` pull policy apply only to services that actually build.
+Pinned configuration/credential revisions are also exposed as `APP_CONFIG_VERSION`
+and `APP_CREDENTIAL_REVISION`; existing MCP variables remain compatible.
+
+`identity.read` optionally declares additional Bao KV read rules using the same
+`mount`, `path` and optional `recursive` contract as service-account manifests.
+These rules are included in the scoped account manifest and must pass the trusted
+consumer catalog. This supports a server configuration referring to separate DB,
+Loki and S3 documents without granting an entire application subtree. Omitting
+`read` preserves the existing single-document permission. Never declare bootstrap
+administrator references on a runtime account.

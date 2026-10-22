@@ -162,13 +162,18 @@ def render(request, framework, local_templates):
         identity = fields(
             request.get("identity"),
             ("application", "environment", "account"),
-            ("credential_revision",),
+            ("credential_revision", "read"),
         )
         for key in ("application", "environment"):
             identity_name(identity[key])
         revision = identity.get("credential_revision", 1)
         if type(revision) is not int or revision < 1:
             raise ValueError("Credential revision must be a positive integer")
+        additional = identity.get("read", [])
+        if not isinstance(additional, list):
+            raise TypeError("Additional identity reads must be a list")
+        for rule in additional:
+            read_rule(rule)
         runtime = {
             **identity,
             "credential_revision": revision,
@@ -292,10 +297,13 @@ def render(request, framework, local_templates):
         build_revision = hashlib.sha256(
             b"".join(Path(files[key]).read_bytes() for key in sorted(files))
         ).hexdigest()[:16]
-        services[primary]["image"] += "-" + build_revision
-        services[primary]["pull_policy"] = "build"
+        if "build" in services[primary]:
+            services[primary]["image"] += "-" + build_revision
+            services[primary]["pull_policy"] = "build"
         services[primary].setdefault("environment", {}).update(
             {
+                "APP_CONFIG_VERSION": str(runtime["config_ref"]["version"]),
+                "APP_CREDENTIAL_REVISION": str(runtime["credential_revision"]),
                 "MCP_CONFIG_VERSION": str(runtime["config_ref"]["version"]),
                 "MCP_CREDENTIAL_REVISION": str(runtime["credential_revision"]),
             }
@@ -397,6 +405,7 @@ def manifests(apps):
                 "credentialRevision": runtime["credential_revision"],
                 "secrets": {
                     "read": [{"mount": reference["mount"], "path": reference["path"]}]
+                    + runtime.get("read", [])
                 },
             }
         )
