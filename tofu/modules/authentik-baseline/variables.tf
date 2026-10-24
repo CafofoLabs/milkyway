@@ -84,8 +84,10 @@ variable "oauth2_applications" {
 
     access_groups = optional(list(string), [])
 
-    access_token_validity  = optional(string, "hours=1")
-    refresh_token_validity = optional(string, "days=30")
+    access_token_validity   = optional(string, "hours=1")
+    refresh_token_validity  = optional(string, "days=30")
+    refresh_token_threshold = optional(string, "seconds=0")
+    scope_mappings          = optional(list(string), [])
   }))
   default = {}
 }
