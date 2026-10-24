@@ -86,7 +86,7 @@
 
 - name: Configure the native agent
   ansible.builtin.copy:
-    content: "{{ {'model': {'provider': native_instance.parameters.provider, 'default': native_instance.parameters.model}, 'terminal': {'backend': 'local'}, 'agent': {'disabled_toolsets': native_instance.parameters.browser | bool | ternary([], ['browser'])}} | combine({'dashboard': {'public_url': native_instance.env.HERMES_DASHBOARD_PUBLIC_URL, 'trusted_proxies': [native_dashboard_proxy_address], 'oauth': {'provider': 'self-hosted', 'self_hosted': {'issuer': native_instance.env.HERMES_DASHBOARD_OIDC_ISSUER, 'client_id': native_dashboard_client_id, 'scopes': (native_instance.env.HERMES_DASHBOARD_OIDC_SCOPES | default('openid profile email')) | split(' ')}}}} if native_instance.parameters.dashboard | default(false) else {}) | to_nice_yaml }}"
+    content: "{{ {'model': {'provider': native_instance.parameters.provider, 'default': native_instance.parameters.model}, 'terminal': {'backend': 'local'}, 'agent': {'disabled_toolsets': native_instance.parameters.browser | bool | ternary([], ['browser'])}} | combine({'dashboard': {'public_url': native_instance.env.HERMES_DASHBOARD_PUBLIC_URL, 'trusted_proxies': [native_dashboard_proxy_address], 'oauth': {'provider': 'self-hosted', 'self_hosted': {'issuer': native_instance.env.HERMES_DASHBOARD_OIDC_ISSUER, 'client_id': native_dashboard_client_id, 'scopes': (native_instance.env.HERMES_DASHBOARD_OIDC_SCOPES | default('openid profile email')).split()}}}} if native_instance.parameters.dashboard | default(false) else {}) | to_nice_yaml }}"
     dest: /var/lib/hermes/.hermes/config.yaml
     owner: hermes
     group: hermes
