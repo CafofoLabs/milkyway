@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.15.0
+
+### Features
+- **native-vms:** support host CPU models ([#65](https://github.com/CafofoLabs/milkyway/pull/65))
 ## v0.14.0
 
 ### Features
