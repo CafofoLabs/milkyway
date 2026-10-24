@@ -183,9 +183,7 @@ def authentik_configuration(value, instance, url):
         )
         or len(set(mappings)) != len(mappings)
     ):
-        raise ValueError(
-            "Scope mappings must be unique Authentik managed OIDC scopes"
-        )
+        raise ValueError("Scope mappings must be unique Authentik managed OIDC scopes")
     for key in ("authorization_flow_slug", "invalidation_flow_slug"):
         if provider[key] is not None:
             name(provider[key])
@@ -336,15 +334,11 @@ def compile_map(document, framework):
                 )
         if urlsplit(env["HERMES_DASHBOARD_PUBLIC_URL"]).path not in ("", "/"):
             raise ValueError("The native dashboard must use a dedicated hostname")
-        scopes = env.get(
-            "HERMES_DASHBOARD_OIDC_SCOPES", "openid profile email"
-        ).split()
+        scopes = env.get("HERMES_DASHBOARD_OIDC_SCOPES", "openid profile email").split()
         if (
             not scopes
             or "openid" not in scopes
-            or any(
-                not re.fullmatch(r"[a-z][a-z0-9_-]*", scope) for scope in scopes
-            )
+            or any(not re.fullmatch(r"[a-z][a-z0-9_-]*", scope) for scope in scopes)
             or len(set(scopes)) != len(scopes)
         ):
             raise ValueError(
