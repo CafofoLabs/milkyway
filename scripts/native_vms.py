@@ -116,9 +116,11 @@ def authentik_configuration(value, instance, url):
         "grant_types": ["authorization_code", "refresh_token"],
         "access_token_validity": "hours=1",
         "refresh_token_validity": "days=30",
+        "refresh_token_threshold": "seconds=0",
         "authorization_flow_slug": None,
         "invalidation_flow_slug": None,
         "signing_key_name": None,
+        "scope_mappings": [],
     }
     provider = provider_defaults | fields(
         application["provider"], (), provider_defaults.keys()
@@ -150,16 +152,40 @@ def authentik_configuration(value, instance, url):
         raise ValueError(
             "Hermes OIDC requires authorization_code and optional refresh_token"
         )
-    for key in ("access_token_validity", "refresh_token_validity"):
+    for key in (
+        "access_token_validity",
+        "refresh_token_validity",
+        "refresh_token_threshold",
+    ):
         if (
             not isinstance(provider[key], str)
             or not re.fullmatch(
                 r"(?:days|hours|minutes|seconds)=\d+(?:;(?:days|hours|minutes|seconds)=\d+)*",
                 provider[key],
             )
-            or not any(int(n) for n in re.findall(r"\d+", provider[key]))
+            or (
+                key != "refresh_token_threshold"
+                and not any(int(n) for n in re.findall(r"\d+", provider[key]))
+            )
         ):
-            raise ValueError("Token validity requires a positive Authentik duration")
+            raise ValueError(
+                "Token validity requires positive durations and a nonnegative threshold"
+            )
+    mappings = provider["scope_mappings"]
+    if (
+        not isinstance(mappings, list)
+        or any(
+            not isinstance(mapping, str)
+            or not re.fullmatch(
+                r"goauthentik\.io/providers/oauth2/scope-[a-z0-9_-]+", mapping
+            )
+            for mapping in mappings
+        )
+        or len(set(mappings)) != len(mappings)
+    ):
+        raise ValueError(
+            "Scope mappings must be unique Authentik managed OIDC scopes"
+        )
     for key in ("authorization_flow_slug", "invalidation_flow_slug"):
         if provider[key] is not None:
             name(provider[key])
@@ -310,6 +336,20 @@ def compile_map(document, framework):
                 )
         if urlsplit(env["HERMES_DASHBOARD_PUBLIC_URL"]).path not in ("", "/"):
             raise ValueError("The native dashboard must use a dedicated hostname")
+        scopes = env.get(
+            "HERMES_DASHBOARD_OIDC_SCOPES", "openid profile email"
+        ).split()
+        if (
+            not scopes
+            or "openid" not in scopes
+            or any(
+                not re.fullmatch(r"[a-z][a-z0-9_-]*", scope) for scope in scopes
+            )
+            or len(set(scopes)) != len(scopes)
+        ):
+            raise ValueError(
+                "Dashboard OIDC scopes must be unique names and include openid"
+            )
     authentik = None
     if parameters.get("dashboard") or "authentik" in document:
         authentik = authentik_configuration(

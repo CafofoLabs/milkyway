@@ -50,10 +50,11 @@ resource "authentik_provider_oauth2" "this" {
   authorization_flow = each.value.authorization_flow_slug == null ? data.authentik_flow.authorization.id : data.authentik_flow.oauth2_authorization[each.key].id
   invalidation_flow  = each.value.invalidation_flow_slug == null ? data.authentik_flow.invalidation.id : data.authentik_flow.oauth2_invalidation[each.key].id
 
-  property_mappings = data.authentik_property_mapping_provider_scope.oidc.ids
+  property_mappings = data.authentik_property_mapping_provider_scope.application[each.key].ids
 
-  access_token_validity  = each.value.access_token_validity
-  refresh_token_validity = each.value.refresh_token_validity
+  access_token_validity   = each.value.access_token_validity
+  refresh_token_validity  = each.value.refresh_token_validity
+  refresh_token_threshold = each.value.refresh_token_threshold
 
   allowed_redirect_uris = [
     for uri in each.value.redirect_uris : {

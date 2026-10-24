@@ -21,12 +21,14 @@ data "authentik_flow" "authentication" {
 # The managed scopes authentik ships. Every OIDC provider gets these so that
 # downstream services can read the user's identity and group membership.
 
-data "authentik_property_mapping_provider_scope" "oidc" {
-  managed_list = [
+data "authentik_property_mapping_provider_scope" "application" {
+  for_each = var.oauth2_applications
+
+  managed_list = concat([
     "goauthentik.io/providers/oauth2/scope-openid",
     "goauthentik.io/providers/oauth2/scope-email",
     "goauthentik.io/providers/oauth2/scope-profile",
-  ]
+  ], each.value.scope_mappings)
 }
 
 # --- Groups -----------------------------------------------------------------
