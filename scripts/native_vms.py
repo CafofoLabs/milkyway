@@ -237,7 +237,13 @@ def compile_map(document, framework):
         or not re.fullmatch(r"[a-f0-9]{64}", template["installer_sha256"])
     ):
         raise ValueError("Native software requires an immutable verified pin")
-    vm = fields(document["vm"], ("node", "vm_id", "vcpus", "memory_mb", "disk_gb"))
+    vm = {"cpu_type": "x86-64-v3"} | fields(
+        document["vm"],
+        ("node", "vm_id", "vcpus", "memory_mb", "disk_gb"),
+        ("cpu_type",),
+    )
+    if vm["cpu_type"] not in ("x86-64-v3", "host"):
+        raise ValueError("Native VM CPU type must be x86-64-v3 or host")
     name(vm["node"])
     for key, low, high in (
         ("vm_id", 100, 999999999),
@@ -324,6 +330,7 @@ def compile_map(document, framework):
         raise ValueError("credential_revision must be positive")
     return {
         **document,
+        "vm": vm,
         "env": env,
         "secret_env": secrets,
         "parameters": {"browser": False, "dashboard": False, **parameters},

@@ -6,6 +6,8 @@ MilkyWay supplies a `default-linux-vm` base and a `hermes-agent` application rec
 
 `tofu/modules/linux-vms` creates protected full clones with DHCP bootstrap, a non-root operator, the guest agent and an explicit node allowlist. It does not provision identities or install applications. The consumer must reject destructive plans and verify each SSH host identity independently before guest configuration.
 
+Set `vm.cpu_type: host` in a native VM map to expose the physical CPU's instructions. Omitted CPU types retain `x86-64-v3`. Changing CPU type requires a full guest shutdown and start; `host` also requires compatible physical CPUs when migrating between nodes.
+
 `ansible/roles/default_linux_vm` configures the Debian baseline, private Tailscale access, SSH CA, firewall cutover and the existing checksum-pinned native Alloy collector. It installs the shared identity/secret clients and delivers an individual workload credential plus non-secret environment bindings. Workload users have no sudo privileges. Docker and Periphery are excluded.
 
 `app-templates/hermes-agent/template.yaml` composes that base. The initial native application runner supports Hermes: it installs the pinned source commit with the checksum-verified upstream installer, selects the provider/model, configures `terminal.backend: local` and supervises the gateway with systemd. Browser binaries and dependencies are opt-in. Without messaging adapters, the gateway runs for scheduled work.

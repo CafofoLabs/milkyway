@@ -83,6 +83,23 @@ def test_compilation_and_multiple_instance_account_preservation():
     assert first["parameters"]["browser"] is False
 
 
+@pytest.mark.parametrize("cpu_type", [None, "x86-64-v3", "host"])
+def test_native_vm_cpu_type_is_preserved_with_compatible_default(cpu_type):
+    document = instance()
+    if cpu_type is not None:
+        document["vm"]["cpu_type"] = cpu_type
+    compiled = native_vms.compile_map(document, ROOT)
+    assert compiled["vm"]["cpu_type"] == (cpu_type or "x86-64-v3")
+
+
+@pytest.mark.parametrize("cpu_type", [None, "", True, [], "unsupported"])
+def test_invalid_cpu_types_are_rejected(cpu_type):
+    document = instance()
+    document["vm"]["cpu_type"] = cpu_type
+    with pytest.raises(ValueError, match="CPU type"):
+        native_vms.compile_map(document, ROOT)
+
+
 @pytest.mark.parametrize(
     "value",
     [
