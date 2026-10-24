@@ -25,7 +25,11 @@ variable "allowed_nodes" {
   }
 }
 variable "hosts" {
-  type = map(object({ node = string, vm_id = number, vcpus = number, memory_mb = number, disk_gb = number }))
+  type = map(object({ node = string, vm_id = number, vcpus = number, memory_mb = number, disk_gb = number, cpu_type = optional(string, "x86-64-v3") }))
+  validation {
+    condition     = alltrue([for host in var.hosts : contains(["x86-64-v3", "host"], host.cpu_type)])
+    error_message = "Native VM CPU type must be x86-64-v3 or host."
+  }
   validation {
     condition     = alltrue([for name, host in var.hosts : can(regex("^[a-z][a-z0-9-]{0,47}$", name)) && contains(var.allowed_nodes, host.node) && host.vm_id >= 100 && host.vm_id <= 999999999 && floor(host.vm_id) == host.vm_id && host.vm_id != var.template_id && host.vcpus >= 1 && host.vcpus <= 64 && floor(host.vcpus) == host.vcpus && host.memory_mb >= 1024 && floor(host.memory_mb) == host.memory_mb && host.disk_gb >= 8 && floor(host.disk_gb) == host.disk_gb]) && length(distinct([for h in var.hosts : h.vm_id])) == length(var.hosts)
     error_message = "Guests require authorized nodes, unique IDs and valid whole-number sizes."
@@ -55,7 +59,7 @@ resource "proxmox_virtual_environment_vm" "this" {
   }
   cpu {
     cores = each.value.vcpus
-    type  = "x86-64-v3"
+    type  = each.value.cpu_type
   }
   memory {
     dedicated = each.value.memory_mb
