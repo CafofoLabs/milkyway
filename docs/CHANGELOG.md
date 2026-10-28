@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.16.0
+
+### Features
+- **authentik:** support per-app offline scopes ([#67](https://github.com/CafofoLabs/milkyway/pull/67))
 ## v0.15.0
 
 ### Features
