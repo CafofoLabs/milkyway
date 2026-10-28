@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.17.0
+
+### Features
+- **hermes:** allow Anthropic OAuth without provider key
 ## v0.16.0
 
 ### Features
