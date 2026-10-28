@@ -81,6 +81,8 @@ def read_secret(connection, token, reference):
 
 def resolve(document, deployment):
     bindings(document)
+    if not document["secret_env"]:
+        return dict(document["env"])
     account = deployment["accounts"][document["account"]]
     session = authenticate(deployment["connection"], account)
     token = session["client_token"]
@@ -113,7 +115,10 @@ def main():
     args = parser.parse_args()
     try:
         document = json.loads(args.bindings.read_text())
-        values = resolve(document, protected_load(args.credentials))
+        values = resolve(
+            document,
+            protected_load(args.credentials) if document["secret_env"] else None,
+        )
         if args.check:
             print("Required runtime bindings verified; values suppressed.")
             return

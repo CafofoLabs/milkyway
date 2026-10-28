@@ -79,6 +79,37 @@ def test_duplicate_path_fetches_once(monkeypatch):
     assert len(calls) == 1
 
 
+def test_secretless_login_does_not_read_machine_credentials(
+    monkeypatch, tmp_path, capsys
+):
+    config = tmp_path / "bindings.json"
+    inputs = document()
+    inputs["secret_env"] = {}
+    config.write_text(json.dumps(inputs))
+    monkeypatch.setattr(
+        secret_env,
+        "protected_load",
+        lambda *a: pytest.fail("No machine credential is needed for public bindings"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "secret_env.py",
+            "--bindings",
+            str(config),
+            "--credentials",
+            str(tmp_path / "missing.json"),
+            "--check",
+        ],
+    )
+    secret_env.main()
+    assert (
+        capsys.readouterr().out
+        == "Required runtime bindings verified; values suppressed.\n"
+    )
+
+
 def test_failure_never_executes_or_discloses_provider_diagnostics(
     monkeypatch, tmp_path, capsys
 ):
