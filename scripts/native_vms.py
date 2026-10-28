@@ -351,7 +351,7 @@ def compile_map(document, framework):
             instance,
             env.get("HERMES_DASHBOARD_PUBLIC_URL", ""),
         )
-    if not secrets:
+    if not secrets and parameters["provider"] != "anthropic":
         raise ValueError("Declare the required provider credential references")
     required_key = {
         "ollama-cloud": "OLLAMA_API_KEY",

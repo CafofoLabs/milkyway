@@ -12,7 +12,7 @@ Set `vm.cpu_type: host` in a native VM map to expose the physical CPU's instruct
 
 `app-templates/hermes-agent/template.yaml` composes that base. The initial native application runner supports Hermes: it installs the pinned source commit with the checksum-verified upstream installer, selects the provider/model, configures `terminal.backend: local` and supervises the gateway with systemd. Browser binaries and dependencies are opt-in. Without messaging adapters, the gateway runs for scheduled work.
 
-Set `parameters.dashboard: true` to enable a separate native dashboard service on the verified tailnet address, port 9119. Declare HTTPS `HERMES_DASHBOARD_PUBLIC_URL` and `HERMES_DASHBOARD_OIDC_ISSUER` in `env`; the consumer must supply `native_dashboard_client_id` (a public PKCE client) and the exact private `native_dashboard_proxy_address`. Hermes enforces its own OIDC gate, including WebSockets. The consumer owns DNS, TLS routing and IdP group bindings. Runtime provider keys still come from Bao, never a dashboard service file. Disabling the option stops and disables the dashboard service.
+Set `parameters.dashboard: true` to enable a separate native dashboard service on the verified tailnet address, port 9119. Declare HTTPS `HERMES_DASHBOARD_PUBLIC_URL` and `HERMES_DASHBOARD_OIDC_ISSUER` in `env`; the consumer must supply `native_dashboard_client_id` (a public PKCE client) and the exact private `native_dashboard_proxy_address`. Hermes enforces its own OIDC gate, including WebSockets. The consumer owns DNS, TLS routing and IdP group bindings. Key-based provider credentials come from Bao, never a dashboard service file. Disabling the option stops and disables the dashboard service.
 
 ## Maps and authorization
 
@@ -27,6 +27,8 @@ secret_env:
 ```
 
 Unknown fields, duplicate YAML keys, path traversal, wildcard paths and protected process-variable overrides fail validation. References never grant access themselves: the existing application identity validator checks them against the administrator-owned catalog. KV v2 permissions apply to the whole path, not individual fields.
+
+For interactive Anthropic OAuth, set `parameters.provider: anthropic`, choose an Anthropic model, and omit `secret_env`. Only this provider supports a map without a provider key. Its service account has no KV read grants. Complete the login in the guest as the `hermes` user with `sudo hermes-agent auth add anthropic --type oauth`; the CLI presents a browser login URL. Hermes keeps its own OAuth state in its private home. A real model request is required after login before accepting the deployment.
 
 Accounts are named `svc-<application>-<environment>-<instance>`. Generated identity manifests aggregate all instances of an application/environment, preserving existing declared accounts when another is added. Each VM receives only its own account from the grouped deployment artifact. The shared M2M foundation must already be provisioned and verified. The recipe does not change human SSO or create provider secret values.
 
@@ -72,9 +74,9 @@ See [Authentik application visibility](https://docs.goauthentik.io/add-secure-ap
 
 Trusted deployment automation delivers a private artifact containing the individual Authentik app password and connection metadata. No infrastructure provisioning token is delivered. This initial credential cannot be obtained through the identity it bootstraps. Protect its transport, storage and backups; rotate it through the existing identity contract.
 
-At every process start, `scripts/secret_env.py` authenticates through Authentik, exchanges its JWT for a short-lived Bao token, reads the declared KV v2 paths, checks every required field and revokes the Bao token. It then replaces itself with Hermes, injecting resolved variables. Provisioning credentials and undeclared provider variables are dropped from the inherited environment. Provider values are never written to `.env`, command arguments or console logs.
+When `secret_env` declares keys, `scripts/secret_env.py` authenticates through Authentik, exchanges its JWT for a short-lived Bao token, reads the declared KV v2 paths, checks every required field and revokes the Bao token. With no secret references, it skips machine-credential loading and network authentication. It then replaces itself with Hermes, injecting declared non-secret variables. Provisioning credentials and undeclared provider variables are dropped from the inherited environment. Provider values are never written to `.env`, command arguments or console logs.
 
-Authentication failures and absent/unreadable fields prevent execution; systemd retries after 30 seconds. A running process retains its key until restarted. Changing a KV value alone does not update that process. Authentik and Bao must be available at startup/restart. Provider key rotation and machine-identity password rotation are separate operations.
+For key-based providers, authentication failures and absent/unreadable fields prevent execution; systemd retries after 30 seconds. A running process retains its key until restarted. Changing a KV value alone does not update that process. Authentik and Bao must be available at startup/restart when secret references exist. Provider key rotation and machine-identity password rotation are separate operations. An interactive OAuth login is stored by Hermes and may require a service restart before the gateway uses it.
 
 Persistent Hermes state is under `/var/lib/hermes/.hermes`. Updates preserve sessions, skills and memories. The source-commit check rejects version drift. Back up application data with a tested restore procedure before storing irreplaceable state; this recipe does not implement that backup.
 

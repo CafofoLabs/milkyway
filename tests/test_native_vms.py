@@ -83,6 +83,23 @@ def test_compilation_and_multiple_instance_account_preservation():
     assert first["parameters"]["browser"] is False
 
 
+def test_anthropic_login_can_use_no_vault_secret():
+    document = instance()
+    document["parameters"] = {"provider": "anthropic", "model": "claude-sonnet-4-6"}
+    document["secret_env"] = {}
+    compiled = native_vms.compile_map(document, ROOT)
+    assert compiled["secret_env"] == {}
+    account = native_vms.manifests([compiled])[("hermes", "prod")]["serviceAccounts"][0]
+    assert account["secrets"]["read"] == []
+
+
+def test_unconfigured_provider_still_requires_a_secret():
+    document = instance()
+    document["secret_env"] = {}
+    with pytest.raises(ValueError, match="provider credential"):
+        native_vms.compile_map(document, ROOT)
+
+
 @pytest.mark.parametrize("cpu_type", [None, "x86-64-v3", "host"])
 def test_native_vm_cpu_type_is_preserved_with_compatible_default(cpu_type):
     document = instance()
