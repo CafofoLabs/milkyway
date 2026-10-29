@@ -216,6 +216,10 @@
     PATH: /var/lib/hermes/.local/bin:/usr/local/bin:/usr/bin:/bin
   register: hermes_bot_screen_status
   changed_when: false
+  failed_when: >-
+    hermes_bot_screen_status.rc != 0 and not
+    (hermes_bot_screen_status.rc == 1 and
+    'not running' in hermes_bot_screen_status.stdout)
   when: native_instance.parameters.bot_desktop | bool
 
 - name: Start the private Bot Desktop screen
