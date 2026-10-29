@@ -300,7 +300,7 @@ def compile_map(document, framework):
     parameters = fields(
         document.get("parameters", {}),
         (),
-        ("provider", "model", "browser", "dashboard"),
+        ("provider", "model", "browser", "dashboard", "bot_desktop"),
     )
     if not isinstance(parameters.get("provider"), str) or not re.fullmatch(
         r"[a-z][a-z0-9_-]*", parameters["provider"]
@@ -316,6 +316,8 @@ def compile_map(document, framework):
         raise ValueError("browser must be boolean")
     if type(parameters.get("dashboard", False)) is not bool:
         raise ValueError("dashboard must be boolean")
+    if type(parameters.get("bot_desktop", False)) is not bool:
+        raise ValueError("bot_desktop must be boolean")
     if parameters.get("dashboard"):
         for key in ("HERMES_DASHBOARD_PUBLIC_URL", "HERMES_DASHBOARD_OIDC_ISSUER"):
             value = env.get(key, "")
@@ -367,7 +369,12 @@ def compile_map(document, framework):
         "vm": vm,
         "env": env,
         "secret_env": secrets,
-        "parameters": {"browser": False, "dashboard": False, **parameters},
+        "parameters": {
+            "browser": False,
+            "dashboard": False,
+            "bot_desktop": False,
+            **parameters,
+        },
         "credential_revision": revision,
         "authentik": authentik,
         "application": template["application"],

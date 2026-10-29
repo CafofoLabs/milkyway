@@ -12,6 +12,8 @@ Set `vm.cpu_type: host` in a native VM map to expose the physical CPU's instruct
 
 `app-templates/hermes-agent/template.yaml` composes that base. The initial native application runner supports Hermes: it installs the pinned source commit with the checksum-verified upstream installer, selects the provider/model, configures `terminal.backend: local` and supervises the gateway with systemd. Browser binaries and dependencies are opt-in. Without messaging adapters, the gateway runs for scheduled work.
 
+Set `parameters.bot_desktop: true` to provision Hermes' private GUI on the guest. The recipe installs only TigerVNC and the Xfce components required by Bot Desktop, verifies the Hermes-pinned `cua-driver`, installs it when missing or out of sync, and starts the screen as the unprivileged `hermes` user. It also selects a headed browser and enables screen startup on the first GUI tool call. Reapplying the recipe restores these prerequisites after a guest rebuild or Hermes upgrade. The display is served through Hermes' private Unix socket; it does not add a public VNC listener or a graphical login to the Proxmox console. `parameters.browser: true` separately enables Hermes' browser toolset for GUI browsing.
+
 Set `parameters.dashboard: true` to enable a separate native dashboard service on the verified tailnet address, port 9119. Declare HTTPS `HERMES_DASHBOARD_PUBLIC_URL` and `HERMES_DASHBOARD_OIDC_ISSUER` in `env`; the consumer must supply `native_dashboard_client_id` (a public PKCE client) and the exact private `native_dashboard_proxy_address`. Hermes enforces its own OIDC gate, including WebSockets. The consumer owns DNS, TLS routing and IdP group bindings. Key-based provider credentials come from Bao, never a dashboard service file. Disabling the option stops and disables the dashboard service.
 
 ## Maps and authorization
@@ -92,6 +94,7 @@ Acceptance requires a real model response, denied unrelated secret access, priva
 
 - [Pinned Hermes installer](https://github.com/NousResearch/hermes-agent/blob/71d34bad1045610252eda02ee79549436896e784/scripts/install.sh)
 - [Hermes v0.21.7](https://github.com/NousResearch/hermes-agent/releases/tag/v0.21.7)
+- [Hermes Bot Screen](https://hermes-agent.nousresearch.com/docs/user-guide/features/bot-screen)
 - [Hermes providers](https://hermes-agent.nousresearch.com/docs/integrations/providers)
 - [Hermes secret helper behavior](https://hermes-agent.nousresearch.com/docs/user-guide/secrets/command)
 - [Ollama Cloud authentication](https://docs.ollama.com/api/authentication)

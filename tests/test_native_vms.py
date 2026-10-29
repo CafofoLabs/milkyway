@@ -81,6 +81,43 @@ def test_compilation_and_multiple_instance_account_preservation():
     ]
     assert first["software"]["commit"] == "71d34bad1045610252eda02ee79549436896e784"
     assert first["parameters"]["browser"] is False
+    assert first["parameters"]["bot_desktop"] is False
+
+
+def test_bot_desktop_is_explicit_and_boolean():
+    document = instance()
+    document["parameters"]["bot_desktop"] = True
+    assert native_vms.compile_map(document, ROOT)["parameters"]["bot_desktop"] is True
+    document["parameters"]["bot_desktop"] = "true"
+    with pytest.raises(ValueError, match="bot_desktop must be boolean"):
+        native_vms.compile_map(document, ROOT)
+
+
+def test_bot_desktop_recipe_manages_private_screen_and_pinned_driver():
+    tasks = yaml.safe_load(
+        (ROOT / "ansible/roles/hermes_agent/tasks/main.yml").read_text()
+    )
+    named = {task["name"]: task for task in tasks}
+    packages = named["Install the minimal private Bot Desktop stack"][
+        "ansible.builtin.apt"
+    ]
+    assert packages["install_recommends"] is False
+    assert {"tigervnc-standalone-server", "xfwm4", "xfce4-panel", "xauth"} <= set(
+        packages["name"]
+    )
+    assert named["Install the pinned computer-use driver"]["ansible.builtin.command"][
+        "argv"
+    ][1:] == [
+        "computer-use",
+        "install",
+    ]
+    assert named["Start the private Bot Desktop screen"]["ansible.builtin.command"][
+        "argv"
+    ][1:] == [
+        "computer-use",
+        "screen",
+        "start",
+    ]
 
 
 def test_anthropic_login_can_use_no_vault_secret():
@@ -175,9 +212,13 @@ def test_dashboard_requires_explicit_https_origins():
 
 
 @pytest.mark.parametrize("enabled", [False, True])
-def test_dashboard_configuration_does_not_require_oidc_values_when_disabled(enabled):
+@pytest.mark.parametrize("bot_desktop", [False, True])
+def test_dashboard_configuration_does_not_require_oidc_values_when_disabled(
+    enabled, bot_desktop
+):
     document = instance()
     document["parameters"]["dashboard"] = enabled
+    document["parameters"]["bot_desktop"] = bot_desktop
     if enabled:
         document["env"].update(
             HERMES_DASHBOARD_PUBLIC_URL="https://hermes.example.test",
@@ -206,6 +247,11 @@ def test_dashboard_configuration_does_not_require_oidc_values_when_disabled(enab
         )
     configuration = yaml.safe_load(engine.from_string(content).render(**variables))
     assert ("dashboard" in configuration) == enabled
+    assert ("bot_desktop" in configuration) == bot_desktop
+    assert ("browser" in configuration) == bot_desktop
+    if bot_desktop:
+        assert configuration["bot_desktop"]["auto_start"] is True
+        assert configuration["browser"]["headed"] is True
     if enabled:
         assert configuration["dashboard"]["oauth"]["provider"] == "self-hosted"
         assert configuration["dashboard"]["trusted_proxies"] == ["100.64.0.1"]
