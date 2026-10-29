@@ -37,6 +37,19 @@
     path: "/var/lib/hermes/.milkyway/installed-{{ native_instance.software.commit }}-{{ native_instance.parameters.browser | bool | ternary('browser', 'minimal') }}"
   register: hermes_installation
 
+- name: Inspect an existing Hermes source checkout
+  become_user: hermes
+  ansible.builtin.command:
+    argv: [git, -C, /var/lib/hermes/.hermes/hermes-agent, rev-parse, HEAD]
+  register: hermes_existing_commit
+  changed_when: false
+  failed_when: false
+
+- name: Reject an unexpected existing Hermes source version
+  ansible.builtin.assert:
+    that: hermes_existing_commit.stdout == native_instance.software.commit
+  when: hermes_existing_commit.rc == 0
+
 - name: Install the pinned Hermes runtime without interactive configuration
   become_user: hermes
   ansible.builtin.command:
@@ -44,7 +57,9 @@
   environment:
     HOME: /var/lib/hermes
     HERMES_HOME: /var/lib/hermes/.hermes
-  when: not hermes_installation.stat.exists
+  when:
+    - not hermes_installation.stat.exists
+    - hermes_existing_commit.rc != 0
   no_log: true
   notify: Restart native hermes
 
