@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.18.2
+
+### Fixes
+- **hermes:** start installed Bot Desktop screen ([#76](https://github.com/CafofoLabs/milkyway/pull/76))
 ## v0.18.1
 
 ### Fixes
