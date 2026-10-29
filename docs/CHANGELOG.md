@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.18.1
+
+### Fixes
+- **hermes:** pin installed v0.22.5 source ([#74](https://github.com/CafofoLabs/milkyway/pull/74))
 ## v0.18.0
 
 ### Features
