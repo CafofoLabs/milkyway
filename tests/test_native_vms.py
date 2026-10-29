@@ -118,6 +118,9 @@ def test_bot_desktop_recipe_manages_private_screen_and_pinned_driver():
         "screen",
         "start",
     ]
+    status = named["Inspect the private Bot Desktop screen"]
+    assert "hermes_bot_screen_status.rc == 1" in status["failed_when"]
+    assert "'not running' in hermes_bot_screen_status.stdout" in status["failed_when"]
 
 
 def test_anthropic_login_can_use_no_vault_secret():
