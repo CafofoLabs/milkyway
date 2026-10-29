@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.18.0
+
+### Features
+- **hermes:** manage private Bot Desktop on native VMs ([#72](https://github.com/CafofoLabs/milkyway/pull/72))
 ## v0.17.0
 
 ### Features
