@@ -80,7 +80,7 @@ When `secret_env` declares keys, `scripts/secret_env.py` authenticates through A
 
 For key-based providers, authentication failures and absent/unreadable fields prevent execution; systemd retries after 30 seconds. A running process retains its key until restarted. Changing a KV value alone does not update that process. Authentik and Bao must be available at startup/restart when secret references exist. Provider key rotation and machine-identity password rotation are separate operations. An interactive OAuth login is stored by Hermes and may require a service restart before the gateway uses it.
 
-Persistent Hermes state is under `/var/lib/hermes/.hermes`. Updates preserve sessions, skills and memories. The source-commit check rejects version drift. Back up application data with a tested restore procedure before storing irreplaceable state; this recipe does not implement that backup.
+Persistent Hermes state is under `/var/lib/hermes/.hermes`. Updates preserve sessions, skills and memories. The source-commit check rejects version drift. If an existing clean checkout already matches the pinned release, the recipe accepts it without rerunning the installer and still reconciles packages, driver and configuration. Back up application data with a tested restore procedure before storing irreplaceable state; this recipe does not implement that backup.
 
 ## Access, logs and acceptance
 
@@ -92,8 +92,8 @@ Acceptance requires a real model response, denied unrelated secret access, priva
 
 ## Sources
 
-- [Pinned Hermes installer](https://github.com/NousResearch/hermes-agent/blob/71d34bad1045610252eda02ee79549436896e784/scripts/install.sh)
-- [Hermes v0.21.7](https://github.com/NousResearch/hermes-agent/releases/tag/v0.21.7)
+- [Pinned Hermes installer](https://github.com/NousResearch/hermes-agent/blob/bf0203a794a07aac3ff764972ab9087baa4e4f4e/scripts/install.sh)
+- [Hermes v0.22.5](https://github.com/NousResearch/hermes-agent/releases/tag/v0.22.5)
 - [Hermes Bot Screen](https://hermes-agent.nousresearch.com/docs/user-guide/features/bot-screen)
 - [Hermes providers](https://hermes-agent.nousresearch.com/docs/integrations/providers)
 - [Hermes secret helper behavior](https://hermes-agent.nousresearch.com/docs/user-guide/secrets/command)

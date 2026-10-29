@@ -79,7 +79,7 @@ def test_compilation_and_multiple_instance_account_preservation():
         "svc-hermes-prod-first",
         "svc-hermes-prod-second",
     ]
-    assert first["software"]["commit"] == "71d34bad1045610252eda02ee79549436896e784"
+    assert first["software"]["commit"] == "bf0203a794a07aac3ff764972ab9087baa4e4f4e"
     assert first["parameters"]["browser"] is False
     assert first["parameters"]["bot_desktop"] is False
 
