@@ -1,5 +1,6 @@
 """Native maps authorize literal references and isolate every workload identity."""
 
+import base64
 import copy
 import json
 import sys
@@ -79,7 +80,7 @@ def test_compilation_and_multiple_instance_account_preservation():
         "svc-hermes-prod-first",
         "svc-hermes-prod-second",
     ]
-    assert first["software"]["commit"] == "bf0203a794a07aac3ff764972ab9087baa4e4f4e"
+    assert first["software"]["commit"] == "b200f5bc60e31588ba2cb60e288029c4a54ba5fa"
     assert first["parameters"]["browser"] is False
     assert first["parameters"]["bot_desktop"] is False
 
@@ -216,11 +217,17 @@ def test_dashboard_requires_explicit_https_origins():
 
 @pytest.mark.parametrize("enabled", [False, True])
 @pytest.mark.parametrize("bot_desktop", [False, True])
+@pytest.mark.parametrize("webapp", [False, True])
 def test_dashboard_configuration_does_not_require_oidc_values_when_disabled(
-    enabled, bot_desktop
+    enabled, bot_desktop, webapp
 ):
+    if webapp and not enabled:
+        return
     document = instance()
     document["parameters"]["dashboard"] = enabled
+    document["parameters"]["webapp"] = webapp
+    if webapp:
+        document["env"]["HERMES_WEBAPP_PUBLIC_URL"] = "https://workspace.example.test"
     document["parameters"]["bot_desktop"] = bot_desktop
     if enabled:
         document["env"].update(
@@ -239,17 +246,49 @@ def test_dashboard_configuration_does_not_require_oidc_values_when_disabled(
     engine.filters.update(
         bool=bool,
         ternary=lambda condition, yes, no: yes if condition else no,
-        combine=lambda a, b: a | b,
+        combine=lambda a, b, **kwargs: (
+            merge(a, b) if kwargs.get("recursive") else a | b
+        ),
+        b64decode=lambda value: base64.b64decode(value).decode(),
+        from_yaml=yaml.safe_load,
         to_nice_yaml=yaml.safe_dump,
     )
-    variables = {"native_instance": native_vms.compile_map(document, ROOT)}
+
+    def merge(left, right):
+        result = copy.deepcopy(left)
+        for key, value in right.items():
+            result[key] = (
+                merge(result[key], value)
+                if isinstance(value, dict) and isinstance(result.get(key), dict)
+                else value
+            )
+        return result
+
+    existing = {
+        "custom": {"preserved": True},
+        "model": {"temperature": 0.4},
+        "dashboard": {"theme": "midnight"},
+    }
+    variables = {
+        "native_instance": native_vms.compile_map(document, ROOT),
+        "hermes_existing_config": {
+            "content": base64.b64encode(yaml.safe_dump(existing).encode()).decode()
+        },
+    }
+
     if enabled:
         variables.update(
             native_dashboard_client_id="a" * 32,
             native_dashboard_proxy_address="100.64.0.1",
         )
     configuration = yaml.safe_load(engine.from_string(content).render(**variables))
-    assert ("dashboard" in configuration) == enabled
+    assert configuration["custom"] == existing["custom"]
+    assert configuration["model"]["temperature"] == 0.4
+    assert configuration["dashboard"]["theme"] == "midnight"
+    assert configuration["webapp"]["enabled"] == webapp
+    if webapp:
+        assert configuration["webapp"]["public_url"] == "https://workspace.example.test"
+        assert configuration["webapp"]["host"] == "0.0.0.0"
     assert ("bot_desktop" in configuration) == bot_desktop
     assert ("browser" in configuration) == bot_desktop
     if bot_desktop:
@@ -354,3 +393,64 @@ def test_authentik_configuration_rejects_ambiguous_or_incompatible_settings(sett
         native_vms.authentik_configuration(
             settings, "first", "https://hermes.example.test"
         )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://workspace.example.test",
+        "https://workspace.example.test/path",
+        "https://workspace.example.test?x=1",
+        "https://workspace.example.test:444",
+        "https://user:password@workspace.example.test",
+    ],
+)
+def test_webapp_rejects_unsafe_origins(url):
+    document = instance()
+    document["parameters"].update(dashboard=True, webapp=True)
+    document["env"]["HERMES_WEBAPP_PUBLIC_URL"] = url
+    with pytest.raises(ValueError, match="Webapp"):
+        native_vms.compile_map(document, ROOT)
+
+
+def test_webapp_requires_managed_authentication():
+    document = instance()
+    document["parameters"]["webapp"] = True
+    with pytest.raises(ValueError, match="OIDC"):
+        native_vms.compile_map(document, ROOT)
+
+
+def test_webapp_firewall_limits_remote_access_to_the_exact_proxy():
+    template = (
+        ROOT / "ansible/roles/host_firewall/templates/milkyway.nft.j2"
+    ).read_text()
+    engine = Environment()
+    engine.filters["milkyway_ipv4_cidr"] = lambda value: value
+    rendered = engine.from_string(template).render(
+        ansible_managed="test",
+        host_firewall_effective_cutover=True,
+        native_instance={"parameters": {"webapp": True}},
+        native_dashboard_proxy_address="100.64.0.1",
+    )
+    allow = rendered.index("ip saddr 100.64.0.1/32 tcp dport 9120 accept")
+    deny = rendered.index("tcp dport 9120 drop")
+    tailnet = rendered.index('iifname "tailscale0" accept')
+    assert allow < deny < tailnet
+
+
+def test_user_gateway_migration_uses_the_live_session_guard():
+    tasks = yaml.safe_load(
+        (ROOT / "ansible/roles/hermes_agent/tasks/main.yml").read_text()
+    )
+    names = [task["name"] for task in tasks]
+    stop = next(
+        task
+        for task in tasks
+        if task["name"]
+        == "Stop the user gateway only when upstream permits stopping live sessions"
+    )
+    assert stop["ansible.builtin.command"]["argv"][1:] == ["gateway", "stop"]
+    assert stop["no_log"] is True
+    assert names.index(stop["name"]) < names.index(
+        "Disable duplicate user gateway supervision"
+    )

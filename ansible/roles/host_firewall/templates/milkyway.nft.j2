@@ -9,6 +9,10 @@ table inet milkyway {
         ct state established,related accept
         ct state invalid drop
         iifname "lo" accept
+{% if native_instance is defined and native_instance.parameters.webapp | default(false) %}
+        iifname "tailscale0" ip saddr {{ (native_dashboard_proxy_address ~ '/32') | milkyway_ipv4_cidr }} tcp dport 9120 accept
+        tcp dport 9120 drop
+{% endif %}
         iifname "tailscale0" accept
         iifname "docker0" accept
         iifname "br-*" accept
