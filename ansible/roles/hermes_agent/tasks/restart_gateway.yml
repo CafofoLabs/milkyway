@@ -1,0 +1,30 @@
+---
+- name: Require an idle gateway immediately before its managed restart
+  become_user: hermes
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, '/var/lib/hermes/.hermes/hermes-agent')
+        from gateway.control_socket import query_gateway_control
+        home = Path('/var/lib/hermes/.hermes')
+        work = query_gateway_control(home, 'active-work')
+        if work is None:
+            assert not (home / 'gateway.sock').exists(), 'Gateway status unavailable; retry maintenance later'
+        else:
+            assert isinstance(work, dict), 'Gateway status was not understood'
+            assert not int(work.get('active_agents') or 0) and not work.get('active_work'), 'Gateway has active work; retry maintenance later'
+        print('Gateway is idle for its managed restart.')
+  environment:
+    HOME: /var/lib/hermes
+    HERMES_HOME: /var/lib/hermes/.hermes
+  changed_when: false
+
+- name: Restart the idle native gateway through its supervisor
+  ansible.builtin.systemd_service:
+    name: hermes-agent
+    state: restarted
+    daemon_reload: true
