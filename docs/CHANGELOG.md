@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.19.0
+
+### Features
+- **hermes:** manage authenticated browser workspaces on v0.22.7 ([#79](https://github.com/CafofoLabs/milkyway/pull/79))
 ## v0.18.2
 
 ### Fixes
