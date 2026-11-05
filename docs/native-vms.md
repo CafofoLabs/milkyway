@@ -92,10 +92,21 @@ Acceptance requires a real model response, denied unrelated secret access, priva
 
 ## Sources
 
-- [Pinned Hermes installer](https://github.com/NousResearch/hermes-agent/blob/bf0203a794a07aac3ff764972ab9087baa4e4f4e/scripts/install.sh)
-- [Hermes v0.22.5](https://github.com/NousResearch/hermes-agent/releases/tag/v0.22.5)
+- [Pinned Hermes installer](https://github.com/NousResearch/hermes-agent/blob/b200f5bc60e31588ba2cb60e288029c4a54ba5fa/scripts/install.sh)
+- [Hermes v0.22.7](https://github.com/NousResearch/hermes-agent/releases/tag/v0.22.7)
 - [Hermes Bot Screen](https://hermes-agent.nousresearch.com/docs/user-guide/features/bot-screen)
 - [Hermes providers](https://hermes-agent.nousresearch.com/docs/integrations/providers)
 - [Hermes secret helper behavior](https://hermes-agent.nousresearch.com/docs/user-guide/secrets/command)
 - [Ollama Cloud authentication](https://docs.ollama.com/api/authentication)
 - [OpenBao policies](https://openbao.org/docs/concepts/policies/)
+
+
+## Browser workspace
+
+Set `parameters.webapp: true` alongside `parameters.dashboard: true` and declare `env.HERMES_WEBAPP_PUBLIC_URL` as a dedicated HTTPS origin. The recipe builds Hermes Desktop's browser bundle with `hermes webapp --build-only` and serves it from the existing system gateway on port 9120. It does not start another gateway or publish VNC. The dashboard continues on port 9119.
+
+The consumer must provision the new HTTPS route, private DNS and an additional strict `<webapp origin>/auth/callback` URI on the instance's existing public OIDC client. The webapp shares dashboard authentication and its exact trusted proxy address, while keeping its own public URL. The guest firewall admits remote TCP/9120 only from that proxy over Tailscale; loopback remains available to native clients.
+
+The system gateway declares external supervision and owns restarts. If a user-level `hermes-gateway.service` is running, reconciliation first stops the competing system retry loop, asks upstream to stop the user gateway without interrupting active sessions, then disables the duplicate user unit. A live-session refusal stops reconciliation; retry after the sessions finish. Existing user unit files remain available for recovery.
+
+Managed fields are merged into the existing configuration, preserving other settings, with private file backups and suppressed configuration output. Reconcile only the intended instance, verify authenticated browser chat, reconnect, terminal and Bot Desktop, then continue to other guests. Disabling `webapp` stops serving the listener after the managed gateway restarts; DNS and IdP removal still require a separate reviewed plan.

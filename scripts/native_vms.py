@@ -300,7 +300,7 @@ def compile_map(document, framework):
     parameters = fields(
         document.get("parameters", {}),
         (),
-        ("provider", "model", "browser", "dashboard", "bot_desktop"),
+        ("provider", "model", "browser", "dashboard", "bot_desktop", "webapp"),
     )
     if not isinstance(parameters.get("provider"), str) or not re.fullmatch(
         r"[a-z][a-z0-9_-]*", parameters["provider"]
@@ -318,6 +318,24 @@ def compile_map(document, framework):
         raise ValueError("dashboard must be boolean")
     if type(parameters.get("bot_desktop", False)) is not bool:
         raise ValueError("bot_desktop must be boolean")
+    if type(parameters.get("webapp", False)) is not bool:
+        raise ValueError("webapp must be boolean")
+    if parameters.get("webapp") and not parameters.get("dashboard"):
+        raise ValueError("webapp requires the managed dashboard OIDC provider")
+    if parameters.get("webapp"):
+        origin = urlsplit(env.get("HERMES_WEBAPP_PUBLIC_URL", ""))
+        if (
+            origin.scheme != "https"
+            or not origin.hostname
+            or origin.port not in (None, 443)
+            or origin.path not in ("", "/")
+            or origin.username
+            or origin.password
+            or origin.query
+            or origin.fragment
+            or any(c.isspace() or c in '"<>\\' for c in origin.geturl())
+        ):
+            raise ValueError("Webapp access requires a dedicated HTTPS origin")
     if parameters.get("dashboard"):
         for key in ("HERMES_DASHBOARD_PUBLIC_URL", "HERMES_DASHBOARD_OIDC_ISSUER"):
             value = env.get(key, "")
@@ -373,6 +391,7 @@ def compile_map(document, framework):
             "browser": False,
             "dashboard": False,
             "bot_desktop": False,
+            "webapp": False,
             **parameters,
         },
         "credential_revision": revision,
