@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.19.1
+
+### Fixes
+- **hermes:** guard active work inside the restart handler ([#81](https://github.com/CafofoLabs/milkyway/pull/81))
 ## v0.19.0
 
 ### Features
