@@ -454,3 +454,41 @@ def test_user_gateway_migration_uses_the_live_session_guard():
     assert names.index(stop["name"]) < names.index(
         "Disable duplicate user gateway supervision"
     )
+
+
+@pytest.mark.parametrize(
+    "work,socket_exists,allowed",
+    [
+        ({"active_agents": 0, "active_work": []}, True, True),
+        ({"active_agents": 1, "active_work": []}, True, False),
+        ({"active_agents": 0, "active_work": [{}]}, True, False),
+        (None, True, False),
+        (None, False, True),
+    ],
+)
+def test_restart_handler_checks_live_work_at_the_restart_boundary(
+    monkeypatch, work, socket_exists, allowed
+):
+    from types import SimpleNamespace
+
+    handlers = yaml.safe_load(
+        (ROOT / "ansible/roles/hermes_agent/handlers/main.yml").read_text()
+    )
+    assert "ansible.builtin.include_tasks" in handlers[0]
+    tasks = yaml.safe_load(
+        (ROOT / "ansible/roles/hermes_agent/tasks/restart_gateway.yml").read_text()
+    )
+    assert tasks[1]["ansible.builtin.systemd_service"]["name"] == "hermes-agent"
+    code = tasks[0]["ansible.builtin.command"]["argv"][-1]
+    monkeypatch.setattr(Path, "exists", lambda _: socket_exists)
+    monkeypatch.setattr(sys, "path", sys.path[:])
+    monkeypatch.setitem(
+        sys.modules,
+        "gateway.control_socket",
+        SimpleNamespace(query_gateway_control=lambda *_: work),
+    )
+    if allowed:
+        exec(code, {})  # noqa: S102 -- exercise the repository-owned Ansible probe
+    else:
+        with pytest.raises(AssertionError):
+            exec(code, {})  # noqa: S102 -- exercise the repository-owned Ansible probe
