@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.20.0
+
+### Features
+- **hermes-agent:** bump pinned Hermes release to v0.23.0 ([#83](https://github.com/CafofoLabs/milkyway/pull/83))
 ## v0.19.1
 
 ### Fixes
