@@ -92,8 +92,8 @@ Acceptance requires a real model response, denied unrelated secret access, priva
 
 ## Sources
 
-- [Pinned Hermes installer](https://github.com/NousResearch/hermes-agent/blob/b200f5bc60e31588ba2cb60e288029c4a54ba5fa/scripts/install.sh)
-- [Hermes v0.22.7](https://github.com/NousResearch/hermes-agent/releases/tag/v0.22.7)
+- [Pinned Hermes installer](https://github.com/NousResearch/hermes-agent/blob/2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19/scripts/install.sh)
+- [Hermes v0.23.0](https://github.com/NousResearch/hermes-agent/releases/tag/v0.23.0)
 - [Hermes Bot Screen](https://hermes-agent.nousresearch.com/docs/user-guide/features/bot-screen)
 - [Hermes providers](https://hermes-agent.nousresearch.com/docs/integrations/providers)
 - [Hermes secret helper behavior](https://hermes-agent.nousresearch.com/docs/user-guide/secrets/command)

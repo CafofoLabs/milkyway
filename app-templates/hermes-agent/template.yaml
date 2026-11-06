@@ -4,6 +4,6 @@ runtime: systemd
 base: milkyway/default-linux-vm
 application: hermes
 user: hermes
-release: v0.22.7
-commit: b200f5bc60e31588ba2cb60e288029c4a54ba5fa
+release: v0.23.0
+commit: 2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
 installer_sha256: abf338605dae6dd28d101673ac6aed7995c955745db46d47676bc591a7957209

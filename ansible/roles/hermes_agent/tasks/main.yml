@@ -98,7 +98,10 @@
 - name: Enable the requested browser through the managed package installer
   become_user: hermes
   ansible.builtin.command:
-    argv: [/var/lib/hermes/.local/bin/hermes, pm, install, agent-browser]
+    # Hermes v0.23.0 renamed the PM package: "agent-browser" is gone,
+    # Chromium is now installed as its own "chromium" package.
+    # https://github.com/NousResearch/hermes-agent/pull/143146
+    argv: [/var/lib/hermes/.local/bin/hermes, pm, install, chromium]
   environment:
     HOME: /var/lib/hermes
     HERMES_HOME: /var/lib/hermes/.hermes
