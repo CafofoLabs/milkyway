@@ -19,6 +19,174 @@ RESERVED_ENV = {
     "LD_LIBRARY_PATH",
 }
 
+PROVIDER = re.compile(r"[a-z][a-z0-9_-]*\Z")
+PROFILE_NAME = re.compile(r"(?:default|[a-z][a-z0-9_-]{0,63})\Z")
+AUXILIARY_TASK = re.compile(r"[a-z][a-z0-9_]*\Z")
+# Hermes' parse_reasoning_effort accepts "none" plus VALID_REASONING_EFFORTS.
+REASONING_EFFORTS = (
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+    "ultra",
+)
+
+
+def provider_name(value, where):
+    if not isinstance(value, str) or not PROVIDER.fullmatch(value):
+        raise ValueError(f"{where} must be a lowercase provider name")
+    return value
+
+
+def model_name(value, where):
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or any(ord(c) < 32 for c in value)
+    ):
+        raise ValueError(f"{where} must be a non-empty model name")
+    return value
+
+
+def reasoning_effort(value, where):
+    if value not in REASONING_EFFORTS:
+        raise ValueError(f"{where} must be one of: {', '.join(REASONING_EFFORTS)}")
+    return value
+
+
+def known_fields(value, where, required, optional=()):
+    if not isinstance(value, dict):
+        raise TypeError(f"{where} must be a mapping")
+    missing = sorted(set(required) - value.keys())
+    if missing:
+        raise ValueError(f"{where} is missing: {', '.join(missing)}")
+    unknown = sorted(map(str, value.keys() - set(required) - set(optional)))
+    if unknown:
+        raise ValueError(f"{where} has unknown keys: {', '.join(unknown)}")
+    return value
+
+
+def route(value, where):
+    known_fields(value, where, ("provider", "model"))
+    return {
+        "provider": provider_name(value["provider"], f"{where}.provider"),
+        "model": model_name(value["model"], f"{where}.model"),
+    }
+
+
+def approval_lists_configuration(value):
+    """Validate named deny lists that profiles reference by name."""
+    if not isinstance(value, dict):
+        raise TypeError("approval_lists must be a mapping")
+    lists = {}
+    for key, patterns in value.items():
+        if not isinstance(key, str) or not PROFILE_NAME.fullmatch(key):
+            raise ValueError("approval_lists names must be lowercase slugs")
+        if not isinstance(patterns, list) or any(
+            not isinstance(p, str) or not p.strip() or "\x00" in p for p in patterns
+        ):
+            raise ValueError(
+                f"approval_lists.{key} must be a list of non-empty pattern strings"
+            )
+        lists[key] = list(patterns)
+    return lists
+
+
+def profiles_configuration(value, lists, parameters):
+    """Normalize Hermes profiles and resolve deny-list references in order."""
+    if not isinstance(value, dict):
+        raise TypeError("profiles must be a mapping")
+    profiles = {}
+    for profile, settings in value.items():
+        if not isinstance(profile, str) or not PROFILE_NAME.fullmatch(profile):
+            raise ValueError(
+                "Profile names must be default or match [a-z][a-z0-9_-]{0,63}"
+            )
+        where = f"profiles.{profile}"
+        default = profile == "default"
+        known_fields(
+            settings,
+            where,
+            () if default else ("provider", "model"),
+            (
+                "provider",
+                "model",
+                "reasoning_effort",
+                "delegation",
+                "auxiliary",
+                "fallback",
+                "approvals_deny",
+            ),
+        )
+        compiled = {}
+        for key in ("provider", "model"):
+            if key in settings:
+                check = provider_name if key == "provider" else model_name
+                check(settings[key], f"{where}.{key}")
+                if default and settings[key] != parameters[key]:
+                    raise ValueError(f"{where}.{key} must equal parameters.{key}")
+            compiled[key] = parameters[key] if default else settings[key]
+        if "reasoning_effort" in settings:
+            compiled["reasoning_effort"] = reasoning_effort(
+                settings["reasoning_effort"], f"{where}.reasoning_effort"
+            )
+        if "delegation" in settings:
+            delegation = known_fields(
+                settings["delegation"],
+                f"{where}.delegation",
+                (),
+                ("provider", "model", "reasoning_effort"),
+            )
+            checks = {
+                "provider": provider_name,
+                "model": model_name,
+                "reasoning_effort": reasoning_effort,
+            }
+            compiled["delegation"] = {
+                key: checks[key](item, f"{where}.delegation.{key}")
+                for key, item in delegation.items()
+            }
+        if "auxiliary" in settings:
+            auxiliary = settings["auxiliary"]
+            if not isinstance(auxiliary, dict):
+                raise ValueError(f"{where}.auxiliary must be a mapping")
+            compiled["auxiliary"] = {}
+            for task, task_route in auxiliary.items():
+                if not isinstance(task, str) or not AUXILIARY_TASK.fullmatch(task):
+                    raise ValueError(
+                        f"{where}.auxiliary task names must match [a-z][a-z0-9_]*"
+                    )
+                compiled["auxiliary"][task] = route(
+                    task_route, f"{where}.auxiliary.{task}"
+                )
+        if "fallback" in settings:
+            fallback = settings["fallback"]
+            if not isinstance(fallback, list):
+                raise ValueError(f"{where}.fallback must be a list")
+            compiled["fallback"] = [
+                route(item, f"{where}.fallback[{index}]")
+                for index, item in enumerate(fallback)
+            ]
+        if "approvals_deny" in settings:
+            references = settings["approvals_deny"]
+            if not isinstance(references, list) or any(
+                not isinstance(r, str) for r in references
+            ):
+                raise ValueError(f"{where}.approvals_deny must be a list of names")
+            missing = [r for r in references if r not in lists]
+            if missing:
+                raise ValueError(
+                    f"{where}.approvals_deny references unknown approval_lists: "
+                    + ", ".join(missing)
+                )
+            patterns = [p for r in references for p in lists[r]]
+            compiled["approvals_deny"] = list(dict.fromkeys(patterns))
+        profiles[profile] = compiled
+    return profiles
+
 
 def env_name(value):
     if (
@@ -201,7 +369,15 @@ def compile_map(document, framework):
     fields(
         document,
         ("version", "name", "template", "environment", "vm"),
-        ("env", "secret_env", "parameters", "credential_revision", "authentik"),
+        (
+            "env",
+            "secret_env",
+            "parameters",
+            "credential_revision",
+            "authentik",
+            "profiles",
+            "approval_lists",
+        ),
     )
     if document["version"] != 1:
         raise ValueError("Unsupported native VM contract version")
@@ -382,6 +558,15 @@ def compile_map(document, framework):
     revision = document.get("credential_revision", 1)
     if type(revision) is not int or revision < 1:
         raise ValueError("credential_revision must be positive")
+    extras = {}
+    if "approval_lists" in document:
+        extras["approval_lists"] = approval_lists_configuration(
+            document["approval_lists"]
+        )
+    if "profiles" in document:
+        extras["profiles"] = profiles_configuration(
+            document["profiles"], extras.get("approval_lists", {}), parameters
+        )
     return {
         **document,
         "vm": vm,
@@ -396,6 +581,7 @@ def compile_map(document, framework):
         },
         "credential_revision": revision,
         "authentik": authentik,
+        **extras,
         "application": template["application"],
         "account": f"svc-{template['application']}-{environment}-{instance}",
         "software": template,
