@@ -10,6 +10,9 @@
   ansible.builtin.include_role:
     name: platform_baseline
 
+- name: Grow the root partition and filesystem to the declared disk size
+  ansible.builtin.include_tasks: root_disk.yml
+
 - name: Configure SSH certificate access
   ansible.builtin.include_role:
     name: ssh_access
