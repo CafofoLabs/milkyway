@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.22.0
+
+### Features
+- **native-vms:** grow root disk online and ignore creation-only SSH keys ([#89](https://github.com/CafofoLabs/milkyway/pull/89))
 ## v0.21.0
 
 ### Features
