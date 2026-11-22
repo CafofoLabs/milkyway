@@ -8,6 +8,18 @@ MilkyWay supplies a `default-linux-vm` base and a `hermes-agent` application rec
 
 Set `vm.cpu_type: host` in a native VM map to expose the physical CPU's instructions. Omitted CPU types retain `x86-64-v3`. Changing CPU type requires a full guest shutdown and start; `host` also requires compatible physical CPUs when migrating between nodes.
 
+The cloud-init SSH key only applies at creation: `platform_baseline` disables cloud-init after the first boot. The module therefore ignores later changes to `initialization[0].user_account[0].keys`, so a plan from another control node with a different public key file stays a no-op. Rotate access to existing guests through the SSH CA, not this key.
+
+### Disk growth
+
+Increasing `vm.disk_gb` resizes the `scsi0` disk online, without a reboot (`reboot_after_update = false`). The provider refuses to shrink a disk; a size never goes back down. After the resize, setup grows the root partition and filesystem inside the guest (`ansible/roles/default_linux_vm/tasks/root_disk.yml`, right after the baseline):
+
+- installs `cloud-guest-utils`, reads the root source and type with `findmnt` and fails with a message unless it is ext4 directly on a disk partition (LVM, XFS and other layouts are grown manually);
+- rescans the parent disk, runs `growpart` on the root partition and reports a change only on `CHANGED` (`NOCHANGE` is success);
+- runs `resize2fs` online only when the filesystem block count is below the partition size.
+
+A second run reports no change in these tasks. Verify with `df -h /` in the guest. Growth uses only free space directly after the root partition.
+
 `ansible/roles/default_linux_vm` configures the Debian baseline, private Tailscale access, SSH CA, firewall cutover and the existing checksum-pinned native Alloy collector. It installs the shared identity/secret clients and delivers an individual workload credential plus non-secret environment bindings. Workload users have no sudo privileges. Docker and Periphery are excluded.
 
 `app-templates/hermes-agent/template.yaml` composes that base. The initial native application runner supports Hermes: it installs the pinned source commit with the checksum-verified upstream installer, selects the provider/model, configures `terminal.backend: local` and supervises the gateway with systemd. Browser binaries and dependencies are opt-in. Without messaging adapters, the gateway runs for scheduled work.

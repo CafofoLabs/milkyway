@@ -98,5 +98,10 @@ resource "proxmox_virtual_environment_vm" "this" {
     wait_for_ip { disabled = true }
   }
   operating_system { type = "l26" }
-  lifecycle { prevent_destroy = true }
+  lifecycle {
+    prevent_destroy = true
+    # Cloud-init is disabled after the first boot (platform_baseline), so the
+    # key only applies at creation; plans must not depend on the control node's key.
+    ignore_changes = [initialization[0].user_account[0].keys]
+  }
 }

@@ -665,3 +665,22 @@ def test_software_pin_overrides_the_template_per_instance():
 def test_software_pin_must_be_complete_and_immutable(software):
     with pytest.raises(ValueError):
         native_vms.compile_map(instance() | {"software": software}, ROOT)
+
+
+def test_root_disk_growth_follows_the_baseline():
+    tasks = yaml.safe_load(
+        (ROOT / "ansible/roles/default_linux_vm/tasks/main.yml").read_text()
+    )
+    names = [task["name"] for task in tasks]
+    growth = names.index(
+        "Grow the root partition and filesystem to the declared disk size"
+    )
+    assert names.index("Configure the private Linux baseline") == growth - 1
+    assert tasks[growth]["ansible.builtin.include_tasks"] == "root_disk.yml"
+
+
+def test_native_vm_module_ignores_creation_only_ssh_keys():
+    module = (ROOT / "tofu/modules/linux-vms/main.tf").read_text()
+    lifecycle = module.split("lifecycle {", 1)[1].split("}", 1)[0]
+    assert "prevent_destroy = true" in lifecycle
+    assert "ignore_changes = [initialization[0].user_account[0].keys]" in lifecycle

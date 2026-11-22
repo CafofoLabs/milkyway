@@ -233,6 +233,7 @@ def ansible_checks(directory: Path, environment: dict[str, str]) -> None:
             "ansible/roles/proxmox_guest_startup/tests/test_startup.py",
             "ansible/roles/platform_credentials/tests/test_bootstrap_seed.py",
             "ansible/roles/host_firewall/tests/test_cutover.py",
+            "ansible/roles/default_linux_vm/tests/test_root_disk.py",
         ],
         cwd=ROOT,
         environment=environment,
