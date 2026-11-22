@@ -1,0 +1,83 @@
+---
+# Cloud-init is disabled after the first boot, so a larger Proxmox disk is
+# claimed here: grow the root partition, then its ext4 filesystem, online.
+- name: Install the partition growth tool
+  ansible.builtin.apt:
+    name: cloud-guest-utils
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Read the root filesystem source and type
+  ansible.builtin.command:
+    argv: [findmnt, --noheadings, --output, 'SOURCE,FSTYPE', --mountpoint, /]
+  register: native_root_mount
+  changed_when: false
+
+- name: Read the root device type and parent disk
+  ansible.builtin.command:
+    argv: [lsblk, --nodeps, --noheadings, --output, 'TYPE,PKNAME', "{{ native_root_mount.stdout.split()[0] }}"]
+  register: native_root_device
+  changed_when: false
+
+- name: Require an ext4 root filesystem on a plain disk partition
+  ansible.builtin.assert:
+    that:
+      - native_root_mount.stdout.split() | length == 2
+      - native_root_mount.stdout.split()[1] == 'ext4'
+      - native_root_device.stdout.split() | length == 2
+      - native_root_device.stdout.split()[0] == 'part'
+    fail_msg: >-
+      Root disk growth supports only ext4 directly on a disk partition; found
+      '{{ native_root_mount.stdout }}' ({{ native_root_device.stdout }}).
+      Grow LVM or other filesystems manually.
+
+- name: Select the root partition and its disk
+  ansible.builtin.set_fact:
+    native_root_partition: "{{ native_root_mount.stdout.split()[0] }}"
+    native_root_disk: "{{ native_root_device.stdout.split()[1] }}"
+
+- name: Read the root partition number
+  ansible.builtin.slurp:
+    src: "/sys/class/block/{{ native_root_partition | basename }}/partition"
+  register: native_root_partition_number
+
+- name: Rescan the root disk for a new size
+  ansible.builtin.command:
+    argv: [tee, "/sys/class/block/{{ native_root_disk }}/device/rescan"]
+    stdin: '1'
+    removes: "/sys/class/block/{{ native_root_disk }}/device/rescan"
+  changed_when: false
+
+- name: Grow the root partition into free disk space
+  ansible.builtin.command:
+    argv:
+      - growpart
+      - "/dev/{{ native_root_disk }}"
+      - "{{ native_root_partition_number.content | b64decode | trim }}"
+  register: native_root_growpart
+  changed_when: "'CHANGED:' in native_root_growpart.stdout"
+  failed_when: >-
+    native_root_growpart.rc != 0 and not
+    (native_root_growpart.rc == 1 and 'NOCHANGE:' in native_root_growpart.stdout)
+
+- name: Read the root partition size
+  ansible.builtin.command:
+    argv: [lsblk, --nodeps, --noheadings, --bytes, --output, SIZE, "{{ native_root_partition }}"]
+  register: native_root_partition_size
+  changed_when: false
+
+- name: Read the root filesystem size
+  ansible.builtin.command:
+    argv: [dumpe2fs, -h, "{{ native_root_partition }}"]
+  register: native_root_superblock
+  changed_when: false
+
+- name: Grow the root filesystem to the partition size
+  vars:
+    block_size: "{{ native_root_superblock.stdout | regex_search('^Block size:\\s+(\\d+)', '\\1', multiline=True) | first | int }}"
+    block_count: "{{ native_root_superblock.stdout | regex_search('^Block count:\\s+(\\d+)', '\\1', multiline=True) | first | int }}"
+  ansible.builtin.command:
+    argv: [resize2fs, "{{ native_root_partition }}"]
+  when: block_count | int < (native_root_partition_size.stdout | trim | int) // (block_size | int)
+  changed_when: true
