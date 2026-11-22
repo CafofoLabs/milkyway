@@ -18,7 +18,7 @@ Set `parameters.dashboard: true` to enable a separate native dashboard service o
 
 ## Maps and authorization
 
-`scripts/native_vms.py` compiles version-1 maps containing `name`, `template`, `environment`, `vm`, `parameters`, `env`, `secret_env` and optional `authentik`, `profiles` and `approval_lists` (see [Hermes profiles](#hermes-profiles)). VM identity includes an explicit `vm_id`; consumers check conflicts with existing guests and placement policy. Credential-shaped environment names require a structured reference:
+`scripts/native_vms.py` compiles version-1 maps containing `name`, `template`, `environment`, `vm`, `parameters`, `env`, `secret_env` and optional `authentik`, `software`, `profiles` and `approval_lists` (see [Hermes profiles](#hermes-profiles) and [Hermes release pin](#hermes-release-pin)). VM identity includes an explicit `vm_id`; consumers check conflicts with existing guests and placement policy. Credential-shaped environment names require a structured reference:
 
 ```yaml
 secret_env:
@@ -81,6 +81,19 @@ Each declared profile is merged into its existing file, keeping every unmanaged 
 
 The default profile is merged within the existing configuration task, so its file is written once per run. Files are written as the `hermes` user with mode 0600, a private backup of the previous file and suppressed output. A change triggers the same idle-aware gateway and dashboard restarts as other configuration changes. Serialization is deterministic, so repeating a run with the same map reports no change. Maps without `profiles` keep their previous behaviour; undeclared profiles are never touched.
 
+## Hermes release pin
+
+`app-templates/hermes-agent/template.yaml` pins the default upstream release (`release`, `commit`, `installer_sha256`). A map may override that pin with an optional `software` block carrying all three fields, for example to run a canary ahead of the other instances:
+
+```yaml
+software:
+  release: v1.2.3
+  commit: 0123456789abcdef0123456789abcdef01234567
+  installer_sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+```
+
+All three fields are required, unknown fields are rejected, and the values must be a `vX.Y.Z` tag, a full 40-character commit and the SHA-256 of `scripts/install.sh` at that commit. The source-commit check then compares the existing checkout with the map's pin, so an upgrade is a reviewed change of this block followed by setup.
+
 ## Declarative Authentik application
 
 Dashboard maps carry an `authentik` block. Consumers pass its normalized application and provider settings to `authentik-baseline`; Terraform contains no per-instance presentation or access defaults. Existing maps without the block keep their previous defaults for compatibility.
@@ -127,7 +140,7 @@ When `secret_env` declares keys, `scripts/secret_env.py` authenticates through A
 
 For key-based providers, authentication failures and absent/unreadable fields prevent execution; systemd retries after 30 seconds. A running process retains its key until restarted. Changing a KV value alone does not update that process. Authentik and Bao must be available at startup/restart when secret references exist. Provider key rotation and machine-identity password rotation are separate operations. An interactive OAuth login is stored by Hermes and may require a service restart before the gateway uses it.
 
-Persistent Hermes state is under `/var/lib/hermes/.hermes`. Updates preserve sessions, skills and memories. The source-commit check rejects version drift. If an existing clean checkout already matches the pinned release, the recipe accepts it without rerunning the installer and still reconciles packages, driver and configuration. Back up application data with a tested restore procedure before storing irreplaceable state; this recipe does not implement that backup.
+Persistent Hermes state is under `/var/lib/hermes/.hermes`. Updates preserve sessions, skills and memories. The source-commit check rejects version drift from the template pin or the map's `software` override. If an existing clean checkout already matches the pinned release, the recipe accepts it without rerunning the installer and still reconciles packages, driver and configuration. Back up application data with a tested restore procedure before storing irreplaceable state; this recipe does not implement that backup.
 
 ## Access, logs and acceptance
 

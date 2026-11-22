@@ -377,6 +377,7 @@ def compile_map(document, framework):
             "authentik",
             "profiles",
             "approval_lists",
+            "software",
         ),
     )
     if document["version"] != 1:
@@ -431,8 +432,17 @@ def compile_map(document, framework):
         name(template[key])
     if template["user"] == "root" or len(template["user"]) > 31:
         raise ValueError("Workload users must be unprivileged Linux account names")
+    if "software" in document:
+        # A deployment may pin another upstream release per instance (for example a
+        # canary ahead of the rest); the pin stays immutable and fully verified.
+        template = template | fields(
+            document["software"], ("release", "commit", "installer_sha256")
+        )
     if (
-        not re.fullmatch(r"v\d+\.\d+\.\d+", template["release"])
+        not isinstance(template["release"], str)
+        or not isinstance(template["commit"], str)
+        or not isinstance(template["installer_sha256"], str)
+        or not re.fullmatch(r"v\d+\.\d+\.\d+", template["release"])
         or not re.fullmatch(r"[a-f0-9]{40}", template["commit"])
         or not re.fullmatch(r"[a-f0-9]{64}", template["installer_sha256"])
     ):

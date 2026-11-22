@@ -628,3 +628,40 @@ def test_named_profiles_require_provider_and_model():
     del document["profiles"]["reviewer"]["model"]
     with pytest.raises(ValueError, match="profiles.reviewer is missing: model"):
         native_vms.compile_map(document, ROOT)
+
+
+SOFTWARE = {
+    "release": "v9.9.9",
+    "commit": "a" * 40,
+    "installer_sha256": "b" * 64,
+}
+
+
+def test_maps_without_software_keep_the_template_pin():
+    template = load(ROOT / "app-templates/hermes-agent/template.yaml")
+    compiled = native_vms.compile_map(instance(), ROOT)
+    assert compiled["software"]["commit"] == template["commit"]
+    assert compiled["software"]["release"] == template["release"]
+
+
+def test_software_pin_overrides_the_template_per_instance():
+    document = instance() | {"software": dict(SOFTWARE)}
+    compiled = native_vms.compile_map(document, ROOT)
+    assert {k: compiled["software"][k] for k in SOFTWARE} == SOFTWARE
+    assert compiled["software"]["runtime"] == "systemd"
+
+
+@pytest.mark.parametrize(
+    "software",
+    [
+        {"release": "v9.9.9", "commit": "a" * 40},
+        SOFTWARE | {"release": "main"},
+        SOFTWARE | {"commit": "abc"},
+        SOFTWARE | {"installer_sha256": "c" * 63},
+        SOFTWARE | {"extra": "x"},
+        SOFTWARE | {"commit": 1},
+    ],
+)
+def test_software_pin_must_be_complete_and_immutable(software):
+    with pytest.raises(ValueError):
+        native_vms.compile_map(instance() | {"software": software}, ROOT)
