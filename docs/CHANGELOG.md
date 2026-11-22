@@ -2,6 +2,10 @@
 
 Generated from merged PR titles preserved in squash commits.
 
+## v0.21.0
+
+### Features
+- **hermes-agent:** declare per-profile configuration and release pin ([#86](https://github.com/CafofoLabs/milkyway/pull/86))
 ## v0.20.0
 
 ### Features
