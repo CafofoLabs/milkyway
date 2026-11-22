@@ -18,7 +18,7 @@ Set `parameters.dashboard: true` to enable a separate native dashboard service o
 
 ## Maps and authorization
 
-`scripts/native_vms.py` compiles version-1 maps containing `name`, `template`, `environment`, `vm`, `parameters`, `env`, `secret_env` and optional `authentik`. VM identity includes an explicit `vm_id`; consumers check conflicts with existing guests and placement policy. Credential-shaped environment names require a structured reference:
+`scripts/native_vms.py` compiles version-1 maps containing `name`, `template`, `environment`, `vm`, `parameters`, `env`, `secret_env` and optional `authentik`, `software`, `profiles` and `approval_lists` (see [Hermes profiles](#hermes-profiles) and [Hermes release pin](#hermes-release-pin)). VM identity includes an explicit `vm_id`; consumers check conflicts with existing guests and placement policy. Credential-shaped environment names require a structured reference:
 
 ```yaml
 secret_env:
@@ -33,6 +33,66 @@ Unknown fields, duplicate YAML keys, path traversal, wildcard paths and protecte
 For interactive Anthropic OAuth, set `parameters.provider: anthropic`, choose an Anthropic model, and omit `secret_env`. Only this provider supports a map without a provider key. Its service account has no KV read grants. Complete the login in the guest as the `hermes` user with `sudo hermes-agent auth add anthropic --type oauth`; the CLI presents a browser login URL. Hermes keeps its own OAuth state in its private home. A real model request is required after login before accepting the deployment.
 
 Accounts are named `svc-<application>-<environment>-<instance>`. Generated identity manifests aggregate all instances of an application/environment, preserving existing declared accounts when another is added. Each VM receives only its own account from the grouped deployment artifact. The shared M2M foundation must already be provisioned and verified. The recipe does not change human SSO or create provider secret values.
+
+## Hermes profiles
+
+Optional `profiles` and `approval_lists` blocks declare per-profile Hermes settings. `approval_lists` names deny-pattern lists once; profiles reference them by name:
+
+```yaml
+parameters:
+  provider: ollama-cloud
+  model: gpt-oss:120b
+approval_lists:
+  destructive: ["rm -rf /", "mkfs"]
+  network: ["curl * | sh"]
+profiles:
+  default:
+    reasoning_effort: high
+    approvals_deny: [destructive]
+  reviewer:
+    provider: openrouter
+    model: example/reviewer-model
+    reasoning_effort: medium
+    delegation:
+      provider: ollama-cloud
+      model: gpt-oss:20b
+      reasoning_effort: low
+    auxiliary:
+      vision: {provider: openrouter, model: example/vision-model}
+    fallback:
+      - {provider: ollama-cloud, model: gpt-oss:120b}
+    approvals_deny: [destructive, network]
+```
+
+Profile names are `default` or match `[a-z][a-z0-9_-]{0,63}`. Each profile accepts `provider`, `model`, `reasoning_effort`, `delegation` (`provider`, `model`, `reasoning_effort`), `auxiliary` (task names matching `[a-z][a-z0-9_]*`, each with `provider` and `model`), `fallback` (a list of `provider`/`model` routes) and `approvals_deny` (names declared in `approval_lists`). `reasoning_effort` accepts the values Hermes parses: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` and `ultra`. Named profiles require `provider` and `model`. `parameters` remains the source for the default profile: `profiles.default` may omit `provider` and `model`, and must repeat them exactly if present. Unknown keys, unknown list names and invalid values fail validation with the offending path. Declare the `secret_env` bindings that each profile's providers need; validation checks only the key required by `parameters.provider`.
+
+The compiled map carries each profile with `approvals_deny` resolved to the referenced lists concatenated in order, keeping the first occurrence of each pattern.
+
+The recipe writes `/var/lib/hermes/.hermes/config.yaml` for `default` and `/var/lib/hermes/.hermes/profiles/<name>/config.yaml` for other profiles. It does not create profiles: a declared profile whose directory is missing stops reconciliation before any configuration is written. Create it with Hermes first, then repeat.
+
+Each declared profile is merged into its existing file, keeping every unmanaged key:
+
+- `model.provider` and `model.default` follow the declaration (`parameters` for `default`). `model.reasoning_effort` is always removed, because Hermes reads only `agent.reasoning_effort`.
+- `agent.reasoning_effort` is set when declared and removed when not.
+- `delegation.provider`, `delegation.model` and `delegation.reasoning_effort` are set or removed to match the declaration; other delegation keys stay.
+- Each declared `auxiliary` task gets its `provider` and `model`; its other keys and undeclared tasks stay.
+- `fallback_providers` is replaced by the declared `fallback` list and removed when none is declared.
+- `approvals.deny` is replaced by the resolved list when `approvals_deny` is declared; other `approvals` keys stay.
+
+The default profile is merged within the existing configuration task, so its file is written once per run. Files are written as the `hermes` user with mode 0600, a private backup of the previous file and suppressed output. A change triggers the same idle-aware gateway and dashboard restarts as other configuration changes. Serialization is deterministic, so repeating a run with the same map reports no change. Maps without `profiles` keep their previous behaviour; undeclared profiles are never touched.
+
+## Hermes release pin
+
+`app-templates/hermes-agent/template.yaml` pins the default upstream release (`release`, `commit`, `installer_sha256`). A map may override that pin with an optional `software` block carrying all three fields, for example to run a canary ahead of the other instances:
+
+```yaml
+software:
+  release: v1.2.3
+  commit: 0123456789abcdef0123456789abcdef01234567
+  installer_sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+```
+
+All three fields are required, unknown fields are rejected, and the values must be a `vX.Y.Z` tag, a full 40-character commit and the SHA-256 of `scripts/install.sh` at that commit. The source-commit check then compares the existing checkout with the map's pin, so an upgrade is a reviewed change of this block followed by setup.
 
 ## Declarative Authentik application
 
@@ -80,7 +140,7 @@ When `secret_env` declares keys, `scripts/secret_env.py` authenticates through A
 
 For key-based providers, authentication failures and absent/unreadable fields prevent execution; systemd retries after 30 seconds. A running process retains its key until restarted. Changing a KV value alone does not update that process. Authentik and Bao must be available at startup/restart when secret references exist. Provider key rotation and machine-identity password rotation are separate operations. An interactive OAuth login is stored by Hermes and may require a service restart before the gateway uses it.
 
-Persistent Hermes state is under `/var/lib/hermes/.hermes`. Updates preserve sessions, skills and memories. The source-commit check rejects version drift. If an existing clean checkout already matches the pinned release, the recipe accepts it without rerunning the installer and still reconciles packages, driver and configuration. Back up application data with a tested restore procedure before storing irreplaceable state; this recipe does not implement that backup.
+Persistent Hermes state is under `/var/lib/hermes/.hermes`. Updates preserve sessions, skills and memories. The source-commit check rejects version drift from the template pin or the map's `software` override. If an existing clean checkout already matches the pinned release, the recipe accepts it without rerunning the installer and still reconciles packages, driver and configuration. Back up application data with a tested restore procedure before storing irreplaceable state; this recipe does not implement that backup.
 
 ## Access, logs and acceptance
 

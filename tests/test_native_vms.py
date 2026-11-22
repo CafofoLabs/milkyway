@@ -15,6 +15,8 @@ import native_vms
 from service_identity import catalog, compile_contract, load
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "ansible/roles/hermes_agent/filter_plugins"))
+import hermes_profiles
 
 
 def test_each_vm_receives_only_its_own_account_from_grouped_credentials():
@@ -252,6 +254,7 @@ def test_dashboard_configuration_does_not_require_oidc_values_when_disabled(
         b64decode=lambda value: base64.b64decode(value).decode(),
         from_yaml=yaml.safe_load,
         to_nice_yaml=yaml.safe_dump,
+        milkyway_hermes_profile=hermes_profiles.hermes_profile,
     )
 
     def merge(left, right):
@@ -492,3 +495,173 @@ def test_restart_handler_checks_live_work_at_the_restart_boundary(
     else:
         with pytest.raises(AssertionError):
             exec(code, {})  # noqa: S102 -- exercise the repository-owned Ansible probe
+
+
+def profiled():
+    document = instance()
+    document["approval_lists"] = {
+        "destructive": ["rm -rf /", "mkfs"],
+        "network": ["curl * | sh", "mkfs"],
+    }
+    document["profiles"] = {
+        "default": {"reasoning_effort": "high", "approvals_deny": ["destructive"]},
+        "reviewer": {
+            "provider": "openrouter",
+            "model": "example/reviewer-model",
+            "reasoning_effort": "none",
+            "delegation": {"provider": "ollama-cloud", "reasoning_effort": "low"},
+            "auxiliary": {
+                "vision": {"provider": "openrouter", "model": "example/vision"}
+            },
+            "fallback": [{"provider": "ollama-cloud", "model": "gpt-oss:20b"}],
+            "approvals_deny": ["network", "destructive", "network"],
+        },
+    }
+    return document
+
+
+def test_profiles_compile_with_resolved_deny_lists():
+    compiled = native_vms.compile_map(profiled(), ROOT)
+    default = compiled["profiles"]["default"]
+    assert default == {
+        "provider": "ollama-cloud",
+        "model": "gpt-oss:120b",
+        "reasoning_effort": "high",
+        "approvals_deny": ["rm -rf /", "mkfs"],
+    }
+    reviewer = compiled["profiles"]["reviewer"]
+    assert reviewer["delegation"] == {
+        "provider": "ollama-cloud",
+        "reasoning_effort": "low",
+    }
+    assert reviewer["fallback"] == [
+        {"provider": "ollama-cloud", "model": "gpt-oss:20b"}
+    ]
+    # Ordered concatenation of the referenced lists, first occurrence wins.
+    assert reviewer["approvals_deny"] == ["curl * | sh", "mkfs", "rm -rf /"]
+    assert compiled["parameters"]["provider"] == "ollama-cloud"
+
+
+def test_maps_without_profiles_compile_without_profile_keys():
+    compiled = native_vms.compile_map(instance(), ROOT)
+    assert "profiles" not in compiled
+    assert "approval_lists" not in compiled
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda d: d["profiles"]["reviewer"].update(temperature=0.2),
+        lambda d: d["profiles"]["reviewer"]["delegation"].update(base_url="x"),
+        lambda d: d["profiles"]["reviewer"]["auxiliary"]["vision"].update(key="x"),
+        lambda d: d["profiles"]["reviewer"]["fallback"][0].update(base_url="x"),
+        lambda d: d["approval_lists"].update(empty=[""]),
+    ],
+)
+def test_unknown_profile_keys_are_rejected(mutate):
+    document = profiled()
+    mutate(document)
+    with pytest.raises(ValueError):
+        native_vms.compile_map(document, ROOT)
+
+
+def test_unknown_profile_key_error_names_the_key():
+    document = profiled()
+    document["profiles"]["reviewer"]["temperature"] = 0.2
+    with pytest.raises(
+        ValueError, match="profiles.reviewer has unknown keys: temperature"
+    ):
+        native_vms.compile_map(document, ROOT)
+
+
+@pytest.mark.parametrize("effort", ["extreme", "", "High", True, 3])
+def test_invalid_reasoning_effort_is_rejected(effort):
+    for path in (("reviewer",), ("reviewer", "delegation")):
+        document = profiled()
+        target = document["profiles"]
+        for key in path:
+            target = target[key]
+        target["reasoning_effort"] = effort
+        with pytest.raises(ValueError, match="reasoning_effort must be one of"):
+            native_vms.compile_map(document, ROOT)
+
+
+@pytest.mark.parametrize(
+    "effort", ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+)
+def test_hermes_reasoning_efforts_are_accepted(effort):
+    document = profiled()
+    document["profiles"]["reviewer"]["reasoning_effort"] = effort
+    compiled = native_vms.compile_map(document, ROOT)
+    assert compiled["profiles"]["reviewer"]["reasoning_effort"] == effort
+
+
+def test_unknown_approval_list_is_rejected():
+    document = profiled()
+    document["profiles"]["reviewer"]["approvals_deny"] = ["destructive", "missing"]
+    with pytest.raises(ValueError, match="unknown approval_lists: missing"):
+        native_vms.compile_map(document, ROOT)
+
+
+@pytest.mark.parametrize(
+    ("key", "value"), [("provider", "openrouter"), ("model", "another-model")]
+)
+def test_default_profile_must_match_parameters(key, value):
+    document = profiled()
+    document["profiles"]["default"][key] = value
+    with pytest.raises(ValueError, match=f"must equal parameters.{key}"):
+        native_vms.compile_map(document, ROOT)
+    document["profiles"]["default"][key] = document["parameters"][key]
+    native_vms.compile_map(document, ROOT)
+
+
+@pytest.mark.parametrize("profile", ["Reviewer", "1st", "a" * 65, "bad.name", ""])
+def test_invalid_profile_names_are_rejected(profile):
+    document = profiled()
+    document["profiles"][profile] = {"provider": "openrouter", "model": "m"}
+    with pytest.raises(ValueError, match="Profile names"):
+        native_vms.compile_map(document, ROOT)
+
+
+def test_named_profiles_require_provider_and_model():
+    document = profiled()
+    del document["profiles"]["reviewer"]["model"]
+    with pytest.raises(ValueError, match="profiles.reviewer is missing: model"):
+        native_vms.compile_map(document, ROOT)
+
+
+SOFTWARE = {
+    "release": "v9.9.9",
+    "commit": "a" * 40,
+    "installer_sha256": "b" * 64,
+}
+
+
+def test_maps_without_software_keep_the_template_pin():
+    template = load(ROOT / "app-templates/hermes-agent/template.yaml")
+    compiled = native_vms.compile_map(instance(), ROOT)
+    assert compiled["software"]["commit"] == template["commit"]
+    assert compiled["software"]["release"] == template["release"]
+
+
+def test_software_pin_overrides_the_template_per_instance():
+    document = instance() | {"software": dict(SOFTWARE)}
+    compiled = native_vms.compile_map(document, ROOT)
+    assert {k: compiled["software"][k] for k in SOFTWARE} == SOFTWARE
+    assert compiled["software"]["runtime"] == "systemd"
+
+
+@pytest.mark.parametrize(
+    "software",
+    [
+        {"release": "v9.9.9", "commit": "a" * 40},
+        SOFTWARE | {"release": "main"},
+        SOFTWARE | {"commit": "abc"},
+        SOFTWARE | {"installer_sha256": "c" * 63},
+        SOFTWARE | {"extra": "x"},
+        SOFTWARE | {"commit": 1},
+    ],
+)
+def test_software_pin_must_be_complete_and_immutable(software):
+    with pytest.raises(ValueError):
+        native_vms.compile_map(instance() | {"software": software}, ROOT)
